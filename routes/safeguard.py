@@ -120,7 +120,8 @@ def process_challenge_one(data):
         "double_consonants": remove_double_consonants,
         "mirror_words": mirror_words,
         "swap_pairs": swap_pairs,
-        "encode_index_parity": decode_index_parity
+        "encode_index_parity": decode_index_parity,
+        "toggle_case": toggle_case
     }
 
     transformations = data["transformations"]
