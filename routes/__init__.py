@@ -19,3 +19,4 @@ import routes.snakes
 import routes.mouse
 import routes.gambit
 import routes.bot
+import routes.two
