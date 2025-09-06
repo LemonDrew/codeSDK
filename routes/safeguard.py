@@ -5,31 +5,6 @@ from routes import app
 
 # logger = logging.getLogger(__name__)
 
-def process_challenge_one(data):
-
-    transform_map = {
-        "encode_mirror_alphabet": decode_mirror_alphabet,
-        "double_consonants": remove_double_consonants,
-        "mirror_words": mirror_words,
-        "swap_pairs": swap_pairs,
-        "encode_index_parity": decode_index_parity
-    }
-
-    transformations = data["transformations"]
-
-    if isinstance(transformations, str):
-        func_names = re.findall(r'(\w+)\(x\)', transformations)
-    elif isinstance(transformations, list):
-        func_names = transformations
-
-    encrypted_data = data["transformed_encrypted_word"]
-
-    for function_name in func_names:
-        func = transform_map[function_name]
-        encrypted_data = func(encrypted_data)
-
-    return encrypted_data
-
 
 def mirror_words(x):
 
@@ -137,6 +112,44 @@ def remove_double_consonants(x):
             i += 1
 
     return "".join(result)
+
+
+def process_challenge_one(data):
+
+    transform_map = {
+        "encode_mirror_alphabet": decode_mirror_alphabet,
+        "double_consonants": remove_double_consonants,
+        "mirror_words": mirror_words,
+        "swap_pairs": swap_pairs,
+        "encode_index_parity": decode_index_parity
+    }
+
+    encrypted_data = data["transformed_encrypted_word"]
+    transformations = data["transformations"]
+
+    def apply_reverse(expr, x):
+        """
+        Recursively apply transformations in reverse order.
+        expr: a string like "encode_mirror_alphabet(double_consonants(x))"
+        x: the current value
+        """
+        if expr.strip() == "x":
+            return x
+
+        match = re.match(r'(\w+)\((.*)\)', expr)
+        if not match:
+            raise ValueError(f"Invalid transformation format: {expr}")
+
+        func_name, inner_expr = match.groups()
+        if func_name not in transform_map:
+            raise ValueError(f"Unknown function: {func_name}")
+
+        x_inner = apply_reverse(inner_expr, x)
+
+        return transform_map[func_name](x_inner)
+
+    result = apply_reverse(transformations, encrypted_data)
+    return result
 
 
 @app.route("/operation-safeguard", methods=["POST"])
