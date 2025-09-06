@@ -9,60 +9,36 @@ def gambit():
     for entry in data:
         intel = entry["intel"]
         reserve = entry["reserve"]
-        fronts = entry["fronts"]
-        stamina  = entry["stamina"]
+        stamina = entry["stamina"]
 
         current_mp = reserve
         current_stamina = stamina
+        total_time = 0
+        prev_front = None
 
-        total = 0
-        prev_front = 0
-
-        for front in intel:
-            
-            number, amount = front
-
-            if prev_front == 0:
-                current_stamina -= 1
+        for number, amount in intel:
+            if current_mp >= amount and current_stamina > 0:
+                if prev_front != number:
+                    total_time += 10
                 current_mp -= amount
-                total += 10
+                current_stamina -= 1
 
-                prev_front = number
+            else:
+                total_time += 10
+                current_mp = reserve
+                current_stamina = stamina
 
-                continue
+                current_mp -= amount
+                current_stamina -= 1
+                total_time += 10
 
-            if prev_front == number:
-                if current_stamina >=1 and current_mp >= amount:
-                    current_stamina -= 1
-                    current_mp -= amount
-                    continue
+            prev_front = number
 
-                else:
-                    current_stamina = stamina
-                    current_mp = reserve
-                    total += 10
-                    continue
+        total_time += 10
 
-            else: 
-                if current_stamina >=1 and current_mp >= amount:
-                    current_stamina -= 1
-                    current_mp -= amount
-                    
-    
-                else:
-                    current_stamina = stamina
-                    current_mp = reserve        
-                    total += 10
+        result.append({"time": total_time})
 
-                    current_stamina -= 1
-                    current_mp -= amount
-                
-                total += 10
-
-        result.append({"time" : total + 10})
-
-    return result
-
+    return jsonify(result)
 
 
 if __name__ == "__main__":
