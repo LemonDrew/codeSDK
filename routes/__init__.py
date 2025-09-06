@@ -6,4 +6,3 @@ import routes.investigate
 import routes.ticket
 import routes.trivia
 import routes.safeguard
-import routes.trading
