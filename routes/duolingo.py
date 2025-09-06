@@ -1,7 +1,7 @@
-from flask import request, jsonify
+from flask import Flask, request, jsonify
 import re
 
-from routes import app
+app = Flask(__name__)
 
 # =======================
 # Roman numeral parser
@@ -85,7 +85,7 @@ def german_to_int(text):
         return german_units[text]
     if text in german_tens:
         return german_tens[text]
-    # handle "siebenundachtzig" style
+    # handle "siebenundachtzig"
     m = re.match(r"(.+)und(.+)", text)
     if m:
         left, right = m.groups()
@@ -94,12 +94,12 @@ def german_to_int(text):
         if right_val:
             return left_val + right_val
     # handle "dreihundertelf"
-    total = 0
     for scale_word, scale_val in german_scales.items():
         if scale_word in text:
-            parts = text.split(scale_word)
+            parts = text.split(scale_word, 1)
             prefix = parts[0]
             suffix = parts[1] if len(parts) > 1 else ""
+            total = 0
             if prefix:
                 total += german_units.get(prefix, 1) * scale_val
             else:
@@ -110,12 +110,12 @@ def german_to_int(text):
     raise ValueError(f"Unknown German number: {text}")
 
 # =======================
-# Chinese parser (Traditional + Simplified)
+# Chinese parser
 # =======================
 chinese_digits = {
     "零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
     "七": 7, "八": 8, "九": 9,
-    "壹": 1, "貳": 2, "叁": 3, "肆": 4, "伍": 5, "陸": 6, "柒": 7,
+    "壹": 1, "貳": 2, "參": 3, "肆": 4, "伍": 5, "陸": 6, "柒": 7,
     "捌": 8, "玖": 9,
 }
 chinese_units = {
@@ -153,16 +153,21 @@ def chinese_to_int(s):
 # =======================
 # Detect language
 # =======================
+traditional_chars = set("萬億壹貳參肆伍陸柒捌玖")
+simplified_chars = set("万亿两〇")
+
 def detect_language(s):
-    if re.fullmatch(r"[IVXLCDM]+", s):  # Roman numerals
+    if re.fullmatch(r"[IVXLCDM]+", s):  # Roman
         return "roman"
     if s.isdigit():
         return "arabic"
-    if re.search(r"[零一二三四五六七八九十百千万萬億亿壹貳叁肆伍陸柒捌玖]", s):
-        # assume Chinese
-        if "萬" in s or "億" in s:  # Traditional
+    if re.search(r"[零一二三四五六七八九十百千万萬億亿壹貳參肆伍陸柒捌玖两〇]", s):
+        if any(ch in s for ch in traditional_chars):
             return "traditional"
-        return "simplified"
+        if any(ch in s for ch in simplified_chars):
+            return "simplified"
+        # ambiguous ones (like "四十五") → treat as Traditional
+        return "traditional"
     if any(w in s.lower() for w in eng_nums.keys() | eng_scales.keys() | {"and"}):
         return "english"
     return "german"
