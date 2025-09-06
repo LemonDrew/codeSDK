@@ -3,35 +3,41 @@ from routes import app
 
 @app.route("/the-mages-gambit", methods=["POST"])
 def gambit():
-    data = request.get_json()[0]
-    intel = data["intel"]
-    reserve = data["reserve"]
-    stamina = data["stamina"]
+    data = request.get_json()
+    result = []
 
-    current_mp = reserve
-    current_stamina = stamina
-    total = 0
-    prev_front = None
+    for request in data:
 
-    for front in intel:
-        number, mana_needed = front
+        intel = data["intel"]
+        reserve = data["reserve"]
+        stamina = data["stamina"]
 
-        if prev_front is not None and prev_front != number:
-            current_stamina = stamina  
+        current_mp = reserve
+        current_stamina = stamina
+        total = 0
+        prev_front = None
 
-        if current_mp < mana_needed or current_stamina == 0:
-            current_mp = reserve
-            current_stamina = stamina
+        for front in intel:
+            number, mana_needed = front
+
+            if prev_front is not None and prev_front != number:
+                current_stamina = stamina  
+
+            if current_mp < mana_needed or current_stamina == 0:
+                current_mp = reserve
+                current_stamina = stamina
+                total += 10  
+
+            current_mp -= mana_needed
+            current_stamina -= 1
             total += 10  
 
-        current_mp -= mana_needed
-        current_stamina -= 1
-        total += 10  
-
-        prev_front = number
+            prev_front = number
+        
+        result.append({"time" : total})
 
 
-    return jsonify([{"time" : total}])
+    return jsonify(result)
    
 
 if __name__ == "__main__":
