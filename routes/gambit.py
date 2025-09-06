@@ -34,7 +34,7 @@ def gambit():
 
             prev_front = number
         
-        result.append({"time" : total})
+        result.append({"time" : total + 10})
 
 
     return jsonify(result)
