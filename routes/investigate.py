@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 
-app = Flask(__name__)
+from routes import app
 
 # Utility: Union-Find (Disjoint Set Union)
 class DSU:
