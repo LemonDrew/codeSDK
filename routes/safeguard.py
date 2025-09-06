@@ -117,10 +117,10 @@ def operation_safeguard():
 
 
     return jsonify({
-        "challenge_one" : result_one,
-        "challenge_two" : "",
-        "challenge_three" : "",
-        "challenge_four" : ""
+        "challenge_one": result_one,
+        "challenge_two": "<value_from_challenge_2>",
+        "challenge_three": "<value_from_challenge_3>",
+        "challenge_four": "<final_decrypted_value>"
     })
 
 if __name__ == "__main__":
