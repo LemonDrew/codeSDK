@@ -16,3 +16,4 @@ import routes.chaseflag
 import routes.duolingo
 import routes.sailingclub
 import routes.snakes
+import routes.mouse
