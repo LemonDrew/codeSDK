@@ -1,4 +1,5 @@
-from flask import Response
+from flask import Response, send_file
+import os
 
 from routes import app
 
@@ -6,8 +7,8 @@ from routes import app
 PAYLOADS = {
     "crackme": "111-1111111\n",
     "sqlinject": "Alice'; UPDATE salary SET salary = 999999 WHERE name='Alice'; --\n",
-    "stack": "STACK_PAYLOAD_HERE_AS_STRING\n",
-    "shellcode": "SHELLCODE_PAYLOAD_AS_STRING\n",
+    "stack": "./payload_stack",           # file
+    "shellcode": "./payload_shellcode",   # file
     "hashclash_mini": "HASHCLASH_MINI_PAYLOAD_AS_STRING\n",
     "malicious_mini": "MALICIOUS_MINI_PAYLOAD_AS_STRING\n",
     "hashclash": "HASHCLASH_PAYLOAD_AS_STRING\n",
@@ -19,7 +20,15 @@ def get_payload(name):
     payload = PAYLOADS.get(name)
     if payload is None:
         return "Payload not found", 404
-    # Return the payload directly as plain text
+
+    # If it’s a file path, send the file
+    if os.path.exists(payload) and os.path.isfile(payload):
+        try:
+            return send_file(payload, as_attachment=True)
+        except Exception as e:
+            return f"Error sending payload: {e}", 500
+
+    # Otherwise, treat as hardcoded string
     return Response(payload, mimetype="text/plain")
 
 if __name__ == "__main__":
