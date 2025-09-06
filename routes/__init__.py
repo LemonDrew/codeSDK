@@ -13,3 +13,4 @@ import routes.trading
 import routes.fog
 import routes.mst
 import routes.chaseflag
+import routes.duolingo
