@@ -10,3 +10,4 @@ import routes.princess
 import routes.ink
 import routes.blanks
 import routes.trading
+import routes.fog
