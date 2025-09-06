@@ -203,7 +203,6 @@ class Movement:
 # ---------------------------------------------------------------------------- #
 #                                Flask Application                             #
 # ---------------------------------------------------------------------------- #
-app = Flask(__name__)
 games = {} # In-memory store for game states
 
 @app.route('/micro-mouse', methods=['POST'])
