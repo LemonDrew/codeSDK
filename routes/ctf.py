@@ -1,30 +1,26 @@
-from flask import Flask, send_file
+from flask import Response
 
 from routes import app
 
-# === Hardcoded payloads file paths ===
+# Hardcoded payloads as strings
 PAYLOADS = {
     "crackme": "111-1111111\n",
-    "stack": "Alice'; UPDATE salary SET salary = 999999 WHERE name='Alice'; --\n",
-    "shellcode": "./payload_shellcode",
-    "hashclash_mini": "./payload_homework_mini",
-    "malicious_mini": "./payload_malicious_mini",
-    "hashclash": "./payload_homework",
-    "malicious": "./payload_malicious",
-    "sqlinject": "./payload_sqlinject"  # optional if needed
+    "sqlinject": "Alice'; UPDATE salary SET salary = 999999 WHERE name='Alice'; --\n",
+    "stack": "STACK_PAYLOAD_HERE_AS_STRING\n",
+    "shellcode": "SHELLCODE_PAYLOAD_AS_STRING\n",
+    "hashclash_mini": "HASHCLASH_MINI_PAYLOAD_AS_STRING\n",
+    "malicious_mini": "MALICIOUS_MINI_PAYLOAD_AS_STRING\n",
+    "hashclash": "HASHCLASH_PAYLOAD_AS_STRING\n",
+    "malicious": "MALICIOUS_PAYLOAD_AS_STRING\n"
 }
 
 @app.route("/payload_<name>", methods=["GET"])
 def get_payload(name):
-    payload_file = PAYLOADS.get(name)
-    if payload_file:
-        try:
-            return send_file(payload_file, as_attachment=True)
-        except Exception as e:
-            return f"Error sending payload: {e}", 500
-    else:
+    payload = PAYLOADS.get(name)
+    if payload is None:
         return "Payload not found", 404
+    # Return the payload directly as plain text
+    return Response(payload, mimetype="text/plain")
 
 if __name__ == "__main__":
-    # Run on all interfaces for public access
     app.run(host="0.0.0.0", port=5000, debug=True)
