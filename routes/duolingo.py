@@ -1,7 +1,7 @@
-from flask import Flask, request, jsonify
+from flask import request, jsonify
 import re
 
-app = Flask(__name__)
+from routes import app
 
 # =======================
 # Roman numeral parser
