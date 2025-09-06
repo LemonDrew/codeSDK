@@ -1,4 +1,3 @@
-import re
 from flask import Flask, request, jsonify
 from routes import app
 # import logging
@@ -124,32 +123,39 @@ def process_challenge_one(data):
         "encode_index_parity": decode_index_parity
     }
 
-    encrypted_data = data["transformed_encrypted_word"]
     transformations = data["transformations"]
 
-    def apply_reverse(expr, x):
-        """
-        Recursively apply transformations in reverse order.
-        expr: a string like "encode_mirror_alphabet(double_consonants(x))"
-        x: the current value
-        """
-        if expr.strip() == "x":
-            return x
+    transformations = transformations.strip("[]")
 
-        match = re.match(r'(\w+)\((.*)\)', expr)
-        if not match:
-            raise ValueError(f"Invalid transformation format: {expr}")
+    new_transformations = []
 
-        func_name, inner_expr = match.groups()
-        if func_name not in transform_map:
-            raise ValueError(f"Unknown function: {func_name}")
+    func_names = [name.strip() for name in transformations.split(",")]
 
-        x_inner = apply_reverse(inner_expr, x)
+    for f in func_names:
 
-        return transform_map[func_name](x_inner)
+        order = []
+        result = ""
 
-    result = apply_reverse(transformations, encrypted_data)
-    return result
+        for char in f:
+            if char == "(":
+                order = [result] + order
+                result = ""
+                
+
+            elif char == ")":
+                new_transformations.extend(order)
+                break
+
+            else:
+                result += char
+
+    encrypted_data = data["transformed_encrypted_word"]
+
+    for function_name in new_transformations:
+        func = transform_map[function_name]
+        encrypted_data = func(encrypted_data)
+
+    return encrypted_data
 
 
 @app.route("/operation-safeguard", methods=["POST"])
@@ -188,3 +194,4 @@ def operation_safeguard():
 
 if __name__ == "__main__":
     app.run(port=3000, debug=True)
+
