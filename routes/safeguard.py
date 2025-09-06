@@ -120,16 +120,19 @@ def process_challenge_one(data):
         "double_consonants": remove_double_consonants,
         "mirror_words": mirror_words,
         "swap_pairs": swap_pairs,
-        "encode_index_parity": decode_index_parity
+        "encode_index_parity": decode_index_parity,
+        "toggle_case": toggle_case
     }
 
     transformations = data["transformations"]
 
-    transformations = transformations.strip("[]")
+    if isinstance(transformations, str):
+        transformations = transformations.strip("[]") 
+        func_names = [name.strip() for name in transformations.split(",")]
+    else:
+        func_names = transformations
 
     new_transformations = []
-
-    func_names = [name.strip() for name in transformations.split(",")]
 
     for f in func_names:
 
