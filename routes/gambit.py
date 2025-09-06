@@ -6,11 +6,11 @@ def gambit():
     data = request.get_json()
     result = []
 
-    for request in data:
+    for entry in data:
 
-        intel = data["intel"]
-        reserve = data["reserve"]
-        stamina = data["stamina"]
+        intel = entry["intel"]
+        reserve = entry["reserve"]
+        stamina = entry["stamina"]
 
         current_mp = reserve
         current_stamina = stamina
