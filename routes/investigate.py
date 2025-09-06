@@ -3,68 +3,76 @@ from collections import defaultdict
 
 from routes import app
 
+def has_cycle_dfs(graph, all_nodes):
+    """Check if the graph has a cycle using DFS"""
+    visited = set()
+    rec_stack = set()
+    
+    def dfs(node, parent):
+        visited.add(node)
+        rec_stack.add(node)
+        
+        for neighbor in graph[node]:
+            if neighbor == parent:
+                continue
+            
+            if neighbor in rec_stack:
+                return True
+            
+            if neighbor not in visited:
+                if dfs(neighbor, node):
+                    return True
+        
+        rec_stack.remove(node)
+        return False
+    
+    # Check each connected component
+    for node in all_nodes:
+        if node not in visited:
+            if dfs(node, None):
+                return True
+    
+    return False
+
 def find_all_cycle_edges(connections):
     if not connections:
         return []
     
-    # Build adjacency list
+    # Build adjacency list and collect all nodes
     graph = defaultdict(set)
-    edge_set = set()
+    all_nodes = set()
     
     for conn in connections:
         spy1, spy2 = conn["spy1"], conn["spy2"]
         graph[spy1].add(spy2)
         graph[spy2].add(spy1)
-        # Store edges in a normalized form to avoid duplicates
-        edge_set.add((min(spy1, spy2), max(spy1, spy2)))
+        all_nodes.add(spy1)
+        all_nodes.add(spy2)
     
-    # Find all edges that are part of cycles
-    cycle_edges = set()
+    # Check if the original graph has any cycles
+    if not has_cycle_dfs(graph, all_nodes):
+        return []  # No cycles, so no cycle edges
     
-    def dfs_find_cycles(node, parent, visited, rec_stack, path):
-        visited.add(node)
-        rec_stack.add(node)
-        path.append(node)
-        
-        for neighbor in graph[node]:
-            if neighbor == parent:
-                continue
-                
-            if neighbor in rec_stack:
-                # Found a cycle - add all edges in the cycle
-                cycle_start_idx = path.index(neighbor)
-                cycle_path = path[cycle_start_idx:] + [neighbor]
-                
-                # Add all edges in this cycle
-                for i in range(len(cycle_path) - 1):
-                    u, v = cycle_path[i], cycle_path[i + 1]
-                    cycle_edges.add((min(u, v), max(u, v)))
-            
-            elif neighbor not in visited:
-                dfs_find_cycles(neighbor, node, visited, rec_stack, path)
-        
-        path.pop()
-        rec_stack.remove(node)
+    cycle_edges = []
     
-    visited = set()
-    all_nodes = set()
-    for conn in connections:
-        all_nodes.add(conn["spy1"])
-        all_nodes.add(conn["spy2"])
-    
-    for node in all_nodes:
-        if node not in visited:
-            dfs_find_cycles(node, None, visited, set(), [])
-    
-    # Convert back to the required format
-    result = []
+    # Try removing each edge and check if cycles still exist
     for conn in connections:
         spy1, spy2 = conn["spy1"], conn["spy2"]
-        edge = (min(spy1, spy2), max(spy1, spy2))
-        if edge in cycle_edges:
-            result.append({"spy1": spy1, "spy2": spy2})
+        
+        # Create a copy of the graph without this edge
+        temp_graph = defaultdict(set)
+        for node in graph:
+            temp_graph[node] = graph[node].copy()
+        
+        # Remove the edge
+        temp_graph[spy1].discard(spy2)
+        temp_graph[spy2].discard(spy1)
+        
+        # If removing this edge eliminates all cycles, then this edge was part of a cycle
+        if not has_cycle_dfs(temp_graph, all_nodes):
+            cycle_edges.append({"spy1": spy1, "spy2": spy2})
     
-    return result
+    return cycle_edges
 
 @app.route("/investigate", methods=["POST"])
 def investigate():
