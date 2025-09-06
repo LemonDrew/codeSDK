@@ -14,3 +14,4 @@ import routes.fog
 import routes.mst
 import routes.chaseflag
 import routes.duolingo
+import routes.sailingclub
