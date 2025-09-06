@@ -187,16 +187,17 @@ def ink():
         
         results = []
         
-        # Analyze the first trading scenario
-        scenario = trading_data[0]
-        finder = TradingArbitrageFinder(scenario['goods'], scenario['ratios'])
-        cycle, gain = finder.find_best_arbitrage()
-        
-        if cycle and gain > 0:
-            result = finder.format_result(cycle, gain)
-            results.append(result)
-        else:
-            results.append({"message": "No arbitrage opportunities found", "path": [], "gain": 0})
+        # Analyze each trading scenario
+        for scenario in trading_data:
+            finder = TradingArbitrageFinder(scenario['goods'], scenario['ratios'])
+            cycle, gain = finder.find_best_arbitrage()
+            
+            if cycle and gain > 0:
+                result = finder.format_result(cycle, gain)
+                results.append(result)
+            else:
+                # Add dummy result when no arbitrage is found
+                results.append({"message": "No arbitrage opportunities found", "path": [], "gain": 0})
         
         return jsonify(results)
     
