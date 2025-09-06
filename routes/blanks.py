@@ -1,9 +1,14 @@
 from flask import Flask, request, jsonify
 import json
+import logging
 import math
 import statistics
 
-app = Flask(__name__)
+from flask import request, jsonify
+
+from routes import app
+
+logger = logging.getLogger(__name__)
 
 class MarketSignalImputer:
     """
