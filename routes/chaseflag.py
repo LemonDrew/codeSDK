@@ -9,7 +9,7 @@ def chaseflag():
         "challenge2": "",
         "challenge3": "UBS{98562706cef8}",
         "challenge4": "",
-        "challenge5": ""
+        "challenge5": "UBS{98cb49b7e5fcd72d63769b53ec41639c}"
     }
     
     return jsonify(response_data)
