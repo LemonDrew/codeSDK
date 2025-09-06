@@ -1,4 +1,4 @@
-from flask import request, jsonify
+from flask import Flask, request, jsonify
 import re
 
 from routes import app
@@ -93,7 +93,7 @@ def german_to_int(text):
         right_val = german_tens.get(right, 0)
         if right_val:
             return left_val + right_val
-    # handle "dreihundertelf"
+    # handle hundreds/thousands like "dreihundertelf"
     for scale_word, scale_val in german_scales.items():
         if scale_word in text:
             parts = text.split(scale_word, 1)
@@ -128,18 +128,14 @@ def chinese_to_int(s):
     total = 0
     section = 0
     number = 0
-    unit = 1
-    for ch in reversed(s):
+    for ch in s:
         if ch in chinese_digits:
             number = chinese_digits[ch]
-            if unit > 1:
-                section += number * unit
-            else:
-                section += number
         elif ch in chinese_units:
             unit = chinese_units[ch]
             if unit >= 10000:
-                total += (section if section else 1) * unit
+                section = (section + number) * unit
+                total += section
                 section = 0
             else:
                 if number == 0:
@@ -148,16 +144,16 @@ def chinese_to_int(s):
             number = 0
         else:
             raise ValueError(f"Unknown Chinese char: {ch}")
-    return total + section
+    return total + section + number
 
 # =======================
-# Detect language
+# Language detection
 # =======================
 traditional_chars = set("萬億壹貳參肆伍陸柒捌玖")
 simplified_chars = set("万亿两〇")
 
 def detect_language(s):
-    if re.fullmatch(r"[IVXLCDM]+", s):  # Roman
+    if re.fullmatch(r"[IVXLCDM]+", s):
         return "roman"
     if s.isdigit():
         return "arabic"
@@ -166,7 +162,7 @@ def detect_language(s):
             return "traditional"
         if any(ch in s for ch in simplified_chars):
             return "simplified"
-        # ambiguous ones (like "四十五") → treat as Traditional
+        # default ambiguous numbers like "四十五"
         return "traditional"
     if any(w in s.lower() for w in eng_nums.keys() | eng_scales.keys() | {"and"}):
         return "english"
@@ -201,8 +197,8 @@ lang_order = {
 @app.route("/duolingo-sort", methods=["POST"])
 def duolingo_sort():
     data = request.get_json()
-    part = data["part"]
-    unsorted_list = data["challengeInput"]["unsortedList"]
+    part = data.get("part")
+    unsorted_list = data.get("challengeInput", {}).get("unsortedList", [])
 
     if part == "ONE":
         sorted_list = sorted(
@@ -216,7 +212,3 @@ def duolingo_sort():
         )
 
     return jsonify({"sortedList": sorted_list})
-
-
-if __name__ == "__main__":
-    app.run(debug=True)
