@@ -186,7 +186,7 @@ class TradingArbitrageFinder:
         }
 
 @app.route('/The-Ink-Archive', methods=['POST'])
-def analyze_data():
+def ink():
     try:
         trading_data = request.json
         
