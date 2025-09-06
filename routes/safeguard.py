@@ -107,7 +107,7 @@ def double_consonants(x):
 
 
 @app.route("/operation-safeguard", methods=["POST"])
-def investigate():
+def operation_safeguard():
     
     data = request.get_json()
 
