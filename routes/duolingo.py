@@ -1,10 +1,8 @@
 from flask import request, jsonify
 import re
-import logging
+import json
 
 from routes import app
-
-logger = logging.getLogger(__name__)
 
 class NumberParser:
     def __init__(self):
@@ -114,7 +112,7 @@ class NumberParser:
                 ones_val = self.german_ones.get(ones_part, 0)
                 tens_val = self.german_tens.get(tens_part, 0)
                 
-                if ones_val > 0 and tens_val > 0:  # Fixed: Check > 0 instead of truthiness
+                if ones_val > 0 and tens_val > 0:
                     return tens_val + ones_val
         
         # Handle simple cases
@@ -130,22 +128,22 @@ class NumberParser:
         # Check for scales in descending order to handle larger values first
         for scale_word, scale_val in sorted(self.german_scales.items(), key=lambda x: x[1], reverse=True):
             if scale_word in remaining:
-                parts = remaining.split(scale_word, 1)  # Split only once
+                parts = remaining.split(scale_word, 1)
                 prefix = parts[0]
                 suffix = parts[1] if len(parts) > 1 else ""
                 
                 multiplier = 1
                 if prefix:
                     multiplier = self.german_ones.get(prefix, 0)
-                    if multiplier == 0:  # If prefix not found, try parsing it recursively
+                    if multiplier == 0:
                         multiplier = self.german_to_int(prefix) if prefix != text else 1
                 
                 total += multiplier * scale_val
                 remaining = suffix
-                break  # Process one scale at a time
+                break
         
         # Handle remaining part
-        if remaining and remaining != text:  # Avoid infinite recursion
+        if remaining and remaining != text:
             if remaining in self.german_ones:
                 total += self.german_ones[remaining]
             elif remaining in self.german_tens:
@@ -163,7 +161,7 @@ class NumberParser:
         
         total = 0
         current = 0
-        temp = 0  # For handling digits before multipliers
+        temp = 0
         
         i = 0
         while i < len(text):
@@ -241,7 +239,6 @@ class NumberParser:
         traditional_chars = {'萬', '億'}
         simplified_chars = {'万', '亿'}
         
-        # Must contain traditional chars AND not contain simplified equivalents
         has_traditional = any(char in traditional_chars for char in text)
         has_simplified = any(char in simplified_chars for char in text)
         
@@ -252,7 +249,6 @@ class NumberParser:
         simplified_chars = {'万', '亿'}
         chinese_chars = set(self.chinese_digits.keys())
         
-        # Contains simplified chars OR is all Chinese chars but not traditional
         has_simplified = any(char in simplified_chars for char in text)
         is_chinese = all(char in chinese_chars for char in text) and len(text) > 0
         is_traditional = self.is_traditional_chinese(text)
@@ -263,19 +259,15 @@ class NumberParser:
         """Check if text is German number word"""
         text_lower = text.lower()
         
-        # Split by 'und' to handle compound numbers
         parts = text_lower.split('und')
         german_words = set(self.german_ones.keys()) | set(self.german_tens.keys()) | set(self.german_scales.keys())
         
-        # Check if any part contains German words
         for part in parts:
-            # Check direct matches first
             if part in german_words:
                 return True
             
-            # Check compound words containing German number parts
             for german_word in german_words:
-                if len(german_word) > 2 and german_word in part:  # Avoid short false positives
+                if len(german_word) > 2 and german_word in part:
                     return True
         
         return False
@@ -298,7 +290,7 @@ class NumberParser:
         if self.is_english(text):
             return self.english_to_int(text)
         
-        # Try Chinese (check traditional first, then simplified)
+        # Try Chinese
         if any(char in self.chinese_digits for char in text):
             return self.chinese_to_int(text)
         
@@ -307,35 +299,39 @@ class NumberParser:
             return self.german_to_int(text)
         
         # If all else fails, return 0
-        logger.warning(f"Could not parse number: {text}")
         return 0
 
 @app.route('/duolingo-sort', methods=['POST'])
 def duolingo_sort():
     try:
+        # Get JSON data - try multiple methods
         data = request.get_json()
+        if not data:
+            data = request.get_json(force=True)
+        if not data and request.data:
+            data = json.loads(request.data.decode('utf-8'))
         
-        if not data or 'part' not in data or 'challengeInput' not in data:
-            logger.error("Invalid input format")
+        if not data:
             return jsonify({'error': 'Invalid input format'}), 400
         
-        part = data['part']
-        unsorted_list = data['challengeInput']['unsortedList']
+        part = data.get('part')
+        challenge_input = data.get('challengeInput', {})
+        unsorted_list = challenge_input.get('unsortedList', [])
         
-        logger.info(f"Processing part {part} with {len(unsorted_list)} items")
+        if not part or not unsorted_list:
+            return jsonify({'error': 'Missing required fields'}), 400
         
         parser = NumberParser()
         
         if part == "ONE":
             # Part 1: Convert all to integers and sort
-            number_pairs = []
+            number_values = []
             for item in unsorted_list:
                 value = parser.parse_number(item)
-                number_pairs.append(value)
-                logger.debug(f"Parsed '{item}' -> {value}")
+                number_values.append(value)
             
             # Sort and convert to strings
-            sorted_numbers = sorted(number_pairs)
+            sorted_numbers = sorted(number_values)
             result = [str(num) for num in sorted_numbers]
             
         elif part == "TWO":
@@ -345,7 +341,6 @@ def duolingo_sort():
                 value = parser.parse_number(item)
                 priority = parser.get_language_priority(item)
                 number_pairs.append((value, priority, item))
-                logger.debug(f"Parsed '{item}' -> value: {value}, priority: {priority}")
             
             # Sort by value first, then by priority
             number_pairs.sort(key=lambda x: (x[0], x[1]))
@@ -354,12 +349,9 @@ def duolingo_sort():
             result = [item[2] for item in number_pairs]
         
         else:
-            logger.error(f"Invalid part specified: {part}")
             return jsonify({'error': 'Invalid part specified'}), 400
         
-        logger.info(f"Returning result: {result}")
         return jsonify({'sortedList': result})
     
     except Exception as e:
-        logger.error(f"Error processing request: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
