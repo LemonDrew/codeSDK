@@ -125,7 +125,7 @@ class NumberParser:
         total = 0
         remaining = text
         
-        # Check for scales in descending order to handle larger values first
+        # Check for scales in descending order
         for scale_word, scale_val in sorted(self.german_scales.items(), key=lambda x: x[1], reverse=True):
             if scale_word in remaining:
                 parts = remaining.split(scale_word, 1)
@@ -135,8 +135,13 @@ class NumberParser:
                 multiplier = 1
                 if prefix:
                     multiplier = self.german_ones.get(prefix, 0)
+                    if multiplier == 0 and prefix in self.german_tens:
+                        multiplier = self.german_tens[prefix]
+                    if multiplier == 0 and prefix != text:
+                        # Try recursive parsing for complex prefixes
+                        multiplier = self.german_to_int(prefix)
                     if multiplier == 0:
-                        multiplier = self.german_to_int(prefix) if prefix != text else 1
+                        multiplier = 1
                 
                 total += multiplier * scale_val
                 remaining = suffix
@@ -148,8 +153,12 @@ class NumberParser:
                 total += self.german_ones[remaining]
             elif remaining in self.german_tens:
                 total += self.german_tens[remaining]
+            else:
+                # Try parsing remaining part
+                remaining_val = self.german_to_int(remaining) if remaining != text else 0
+                total += remaining_val
         
-        return total if total > 0 else self.german_ones.get(text, 0)
+        return total if total > 0 else 0
     
     def chinese_to_int(self, text):
         """Convert Chinese numerals (traditional or simplified) to integer"""
