@@ -1,5 +1,6 @@
-
 import re
+from flask import Flask, request, jsonify
+from routes import app
 
 def process_challenge_one(data):
 
@@ -104,9 +105,24 @@ def double_consonants(x):
 
     return "".join(result)
 
-print(process_challenge_one({
-    "transformations": "[encode_mirror_alphabet(x), double_consonants(x), mirror_words(x), swap_pairs(x), encode_index_parity(x)]",
-    "transformed_encrypted_word": "HELLO"
-  }))
 
+@app.route("/operation-safeguard", methods=["POST"])
+def investigate():
+    
+    data = request.get_json()
+
+    challenge_one = data["challenge_one"]
+
+    result_one = process_challenge_one(challenge_one)
+
+
+    return jsonify({
+        "challenge_one" : result_one,
+        "challenge_two" : "",
+        "challenge_three" : "",
+        "challenge_four" : ""
+    })
+
+if __name__ == "__main__":
+    app.run(port=3000, debug=True)
 
