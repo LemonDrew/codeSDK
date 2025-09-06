@@ -1,4 +1,3 @@
-from flask import Flask, request, jsonify
 import json
 import logging
 import math
@@ -336,21 +335,18 @@ def blankety_blanks():
         
         series_list = data['series']
         
-        if not isinstance(series_list, list) or len(series_list) != 100:
-            return jsonify({'error': 'Expected exactly 100 series'}), 400
+        # REMOVED: Strict validation that was causing errors
+        # Accept any number of series and any length
         
         completed_series = []
-        method_stats = {}
         
-        for i, series in enumerate(series_list):
-            if not isinstance(series, list) or len(series) != 1000:
-                return jsonify({'error': f'Series {i} must have exactly 1000 elements'}), 400
-            
-            # Impute the series
+        for series in series_list:
+            # Impute the series (whatever length it is)
             completed = imputer.impute_series(series)
             completed_series.append(completed)
         
         return jsonify({'answer': completed_series})
         
     except Exception as e:
+        logger.error(f"Processing error: {str(e)}")
         return jsonify({'error': f'Processing error: {str(e)}'}), 500
