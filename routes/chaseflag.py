@@ -4,12 +4,8 @@ from routes import app
 
 @app.route('/chasetheflag', methods=['POST'])
 def chaseflag():
-    """
-    Handle POST requests to /chasetheflag endpoint
-    Returns JSON response with challenge flags
-    """
     response_data = {
-        "challenge1": "O0qEMh7+oA1ckgB5O2uwzyYyhiA=",
+        "challenge1": "UBS{479af657c4de}",
         "challenge2": "",
         "challenge3": "98562706cef8",
         "challenge4": "",
