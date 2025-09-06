@@ -150,7 +150,8 @@ def operation_safeguard():
     challenge_four_data = data.get("challenge_four")
 
     result_one = process_challenge_one(challenge_one_data)
-    
+
+
 
     if data is None:
         return jsonify({"error": "Invalid JSON"}), 400
