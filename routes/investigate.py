@@ -8,55 +8,46 @@ def find_all_cycle_edges(connections):
         return []
     
     # Build adjacency list
-    graph = defaultdict(set)
-    edge_set = set()
-    
+    graph = defaultdict(list)
     for conn in connections:
         spy1, spy2 = conn["spy1"], conn["spy2"]
-        graph[spy1].add(spy2)
-        graph[spy2].add(spy1)
-        # Store edges in a normalized form to avoid duplicates
-        edge_set.add((min(spy1, spy2), max(spy1, spy2)))
+        graph[spy1].append(spy2)
+        graph[spy2].append(spy1)
     
-    # Find all edges that are part of cycles
+    visited = set()
     cycle_edges = set()
     
-    def dfs_find_cycles(node, parent, visited, rec_stack, path):
+    def dfs(node, parent, path):
         visited.add(node)
-        rec_stack.add(node)
-        path.append(node)
         
         for neighbor in graph[node]:
             if neighbor == parent:
                 continue
+            
+            if neighbor in path:
+                # Found a cycle - mark all edges in the cycle
+                cycle_start = path.index(neighbor)
+                cycle_nodes = path[cycle_start:] + [neighbor]
                 
-            if neighbor in rec_stack:
-                # Found a cycle - add all edges in the cycle
-                cycle_start_idx = path.index(neighbor)
-                cycle_path = path[cycle_start_idx:] + [neighbor]
-                
-                # Add all edges in this cycle
-                for i in range(len(cycle_path) - 1):
-                    u, v = cycle_path[i], cycle_path[i + 1]
+                for i in range(len(cycle_nodes) - 1):
+                    u, v = cycle_nodes[i], cycle_nodes[i + 1]
                     cycle_edges.add((min(u, v), max(u, v)))
             
             elif neighbor not in visited:
-                dfs_find_cycles(neighbor, node, visited, rec_stack, path)
-        
-        path.pop()
-        rec_stack.remove(node)
+                dfs(neighbor, node, path + [node])
     
-    visited = set()
+    # Get all nodes
     all_nodes = set()
     for conn in connections:
         all_nodes.add(conn["spy1"])
         all_nodes.add(conn["spy2"])
     
+    # Start DFS from each unvisited node
     for node in all_nodes:
         if node not in visited:
-            dfs_find_cycles(node, None, visited, set(), [])
+            dfs(node, None, [])
     
-    # Convert back to the required format
+    # Return edges that are part of cycles, preserving original format
     result = []
     for conn in connections:
         spy1, spy2 = conn["spy1"], conn["spy2"]
@@ -69,7 +60,12 @@ def find_all_cycle_edges(connections):
 @app.route("/investigate", methods=["POST"])
 def investigate():
     data = request.get_json()
-    networks = data.get("networks", [])
+    
+    # Handle both possible input formats
+    if isinstance(data, dict) and "networks" in data:
+        networks = data["networks"]
+    elif isinstance(data, list):
+        networks = data
 
     results = []
     for net in networks:
