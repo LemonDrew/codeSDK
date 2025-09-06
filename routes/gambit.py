@@ -59,9 +59,10 @@ def gambit():
                 
                 total += 10
 
-        result.append({"time" : total})
+        result.append({"time" : total + 10})
 
-    return jsonify(result)
+    return result
+
 
 
 if __name__ == "__main__":
