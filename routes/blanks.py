@@ -10,23 +10,11 @@ from routes import app
 
 logger = logging.getLogger(__name__)
 
-class MarketSignalImputer:
+class FastImputer:
     """
-    - Linear: trends and steady growth
-    - Quadratic: curved trends and acceleration
-    - Moving Average: smooth local patterns
-    - Seasonal: periodic/cyclical patterns
-    - Exponential: exponential growth/decay
+    Fast imputation using heuristic method selection instead of cross-validation.
+    Picks methods based on data characteristics, not expensive testing.
     """
-    
-    def __init__(self):
-        self.methods = {
-            'linear': self._linear_interpolation,
-            'quadratic': self._quadratic_interpolation, 
-            'moving_average': self._moving_average_interpolation,
-            'seasonal': self._seasonal_interpolation,
-            'exponential': self._exponential_interpolation
-        }
     
     def _get_valid_points(self, series):
         """Extract valid data points with their indices"""
@@ -36,14 +24,69 @@ class MarketSignalImputer:
                 valid_points.append((i, val))
         return valid_points
     
+    def _analyze_pattern(self, valid_points):
+        """
+        Fast pattern analysis using simple heuristics
+        Returns: pattern_type, confidence
+        """
+        if len(valid_points) < 3:
+            return 'linear', 1.0
+        
+        values = [val for idx, val in valid_points]
+        indices = [idx for idx, val in valid_points]
+        
+        # Calculate basic statistics
+        value_range = max(values) - min(values)
+        mean_val = statistics.mean(values)
+        
+        # Check for exponential pattern (rapid growth/decay)
+        if all(v > 0 for v in values) and value_range > abs(mean_val):
+            ratios = []
+            for i in range(1, len(values)):
+                if values[i-1] != 0:
+                    ratios.append(values[i] / values[i-1])
+            
+            if ratios and statistics.stdev(ratios) < 0.5:  # Consistent ratio
+                avg_ratio = statistics.mean(ratios)
+                if avg_ratio > 1.2 or avg_ratio < 0.8:  # Significant growth/decay
+                    return 'exponential', 0.8
+        
+        # Check for periodic pattern (simple peak detection)
+        if len(valid_points) >= 10:
+            # Look for repeating patterns in differences
+            diffs = [values[i+1] - values[i] for i in range(len(values)-1)]
+            if len(diffs) >= 6:
+                # Check if pattern repeats every 5, 10, or 20 points
+                for period in [5, 10, 20]:
+                    if len(diffs) >= period * 2:
+                        correlations = []
+                        for i in range(len(diffs) - period):
+                            correlations.append(diffs[i] * diffs[i + period])
+                        
+                        if correlations and statistics.mean(correlations) > 0:
+                            return 'seasonal', 0.6
+        
+        # Check for quadratic pattern (acceleration/deceleration)
+        if len(valid_points) >= 5:
+            # Calculate second differences
+            first_diffs = [values[i+1] - values[i] for i in range(len(values)-1)]
+            second_diffs = [first_diffs[i+1] - first_diffs[i] for i in range(len(first_diffs)-1)]
+            
+            if second_diffs:
+                avg_second_diff = statistics.mean([abs(d) for d in second_diffs])
+                if avg_second_diff > value_range * 0.1:  # Significant curvature
+                    return 'quadratic', 0.7
+        
+        # Default to linear for steady trends
+        return 'linear', 0.9
+    
     def _linear_interpolation(self, series):
-        """
-        Linear interpolation - best for steady trends
-        Uses slope between nearest neighbors
-        """
+        """Fast linear interpolation"""
         valid_points = self._get_valid_points(series)
         if len(valid_points) < 2:
-            return self._fallback_fill(series, valid_points)
+            if valid_points:
+                return [valid_points[0][1]] * len(series)
+            return [0.0] * len(series)
         
         result = [None] * len(series)
         
@@ -51,10 +94,10 @@ class MarketSignalImputer:
         for idx, val in valid_points:
             result[idx] = val
         
-        # Interpolate missing values
+        # Linear interpolation/extrapolation
         for i in range(len(series)):
             if result[i] is None:
-                # Find surrounding points
+                # Find nearest neighbors
                 left_point = None
                 right_point = None
                 
@@ -66,25 +109,34 @@ class MarketSignalImputer:
                         break
                 
                 if left_point and right_point:
-                    # Linear interpolation
+                    # Interpolate
                     x1, y1 = left_point
                     x2, y2 = right_point
                     t = (i - x1) / (x2 - x1)
                     result[i] = y1 + t * (y2 - y1)
                 elif left_point:
-                    # Extrapolate forward using last trend
-                    result[i] = self._extrapolate_linear(valid_points, i, 'forward')
+                    # Extrapolate forward
+                    if len(valid_points) >= 2:
+                        x1, y1 = valid_points[-2]
+                        x2, y2 = valid_points[-1]
+                        slope = (y2 - y1) / (x2 - x1)
+                        result[i] = y2 + slope * (i - x2)
+                    else:
+                        result[i] = left_point[1]
                 elif right_point:
-                    # Extrapolate backward using first trend
-                    result[i] = self._extrapolate_linear(valid_points, i, 'backward')
+                    # Extrapolate backward  
+                    if len(valid_points) >= 2:
+                        x1, y1 = valid_points[0]
+                        x2, y2 = valid_points[1]
+                        slope = (y2 - y1) / (x2 - x1)
+                        result[i] = y1 + slope * (i - x1)
+                    else:
+                        result[i] = right_point[1]
         
         return result
     
     def _quadratic_interpolation(self, series):
-        """
-        Quadratic interpolation - captures curved trends and acceleration
-        Fits parabolas through local triplets of points
-        """
+        """Fast quadratic interpolation using local fits"""
         valid_points = self._get_valid_points(series)
         if len(valid_points) < 3:
             return self._linear_interpolation(series)
@@ -95,373 +147,175 @@ class MarketSignalImputer:
         for idx, val in valid_points:
             result[idx] = val
         
-        # Interpolate missing values
+        # Quadratic interpolation
         for i in range(len(series)):
             if result[i] is None:
-                # Find best triplet of points around position i
-                best_triplet = self._find_best_triplet(valid_points, i)
-                if best_triplet:
-                    result[i] = self._quadratic_fit(best_triplet, i)
-                else:
-                    # Fall back to linear
-                    result[i] = self._linear_interpolation(series)[i]
-        
-        return result
-    
-    def _moving_average_interpolation(self, series):
-        """
-        Moving average based interpolation - smooths local variations
-        Uses weighted average of nearby points
-        """
-        valid_points = self._get_valid_points(series)
-        if len(valid_points) < 3:
-            return self._linear_interpolation(series)
-        
-        result = [None] * len(series)
-        
-        # Fill known values
-        for idx, val in valid_points:
-            result[idx] = val
-        
-        # First pass: linear interpolation
-        linear_result = self._linear_interpolation(series)
-        
-        # Second pass: smooth with moving average
-        window_size = min(20, len(valid_points) // 3)
-        
-        for i in range(len(series)):
-            if result[i] is None:
-                # Find nearby points within window
-                nearby_points = []
-                for idx, val in valid_points:
-                    if abs(idx - i) <= window_size:
-                        weight = 1.0 / (1.0 + abs(idx - i))  # Distance-based weight
-                        nearby_points.append((val, weight))
+                # Find best triplet around position i
+                best_triplet = None
+                min_distance = float('inf')
                 
-                if nearby_points:
-                    # Weighted average
-                    weighted_sum = sum(val * weight for val, weight in nearby_points)
-                    total_weight = sum(weight for val, weight in nearby_points)
-                    result[i] = weighted_sum / total_weight
+                for j in range(len(valid_points) - 2):
+                    triplet = valid_points[j:j+3]
+                    center_idx = triplet[1][0]
+                    distance = abs(center_idx - i)
+                    
+                    if distance < min_distance:
+                        min_distance = distance
+                        best_triplet = triplet
+                
+                if best_triplet:
+                    # Lagrange interpolation
+                    (x1, y1), (x2, y2), (x3, y3) = best_triplet
+                    x = i
+                    
+                    term1 = y1 * ((x - x2) * (x - x3)) / ((x1 - x2) * (x1 - x3))
+                    term2 = y2 * ((x - x1) * (x - x3)) / ((x2 - x1) * (x2 - x3))
+                    term3 = y3 * ((x - x1) * (x - x2)) / ((x3 - x1) * (x3 - x2))
+                    
+                    result[i] = term1 + term2 + term3
                 else:
+                    # Fallback to linear
+                    linear_result = self._linear_interpolation(series)
                     result[i] = linear_result[i]
         
         return result
     
     def _seasonal_interpolation(self, series):
-        """
-        Seasonal/periodic interpolation - detects and uses repeating patterns
-        Looks for periodic behavior to predict missing values
-        """
+        """Fast seasonal interpolation using detected period"""
         valid_points = self._get_valid_points(series)
         if len(valid_points) < 10:
             return self._linear_interpolation(series)
         
-        # Detect potential periods (common market cycles)
-        potential_periods = [5, 10, 20, 50, 100, 250]  # Daily, weekly, monthly patterns
-        best_period = self._detect_best_period(valid_points, potential_periods)
-        
-        if best_period:
-            return self._periodic_interpolation(series, valid_points, best_period)
-        else:
-            return self._moving_average_interpolation(series)
-    
-    def _exponential_interpolation(self, series):
-        """
-        Exponential interpolation - for exponential growth/decay patterns
-        Fits exponential curves to capture compound growth
-        """
-        valid_points = self._get_valid_points(series)
-        if len(valid_points) < 3:
+        # Quick period detection
+        period = self._detect_period_fast(valid_points)
+        if not period:
             return self._linear_interpolation(series)
         
-        # Check if data might be exponential (all positive and varying significantly)
-        values = [val for idx, val in valid_points]
-        if min(values) <= 0 or max(values) / min(values) < 2:
-            return self._quadratic_interpolation(series)
-        
         result = [None] * len(series)
         
         # Fill known values
         for idx, val in valid_points:
             result[idx] = val
         
-        # Log-transform for exponential fitting
-        try:
-            log_points = [(idx, math.log(val)) for idx, val in valid_points if val > 0]
-            if len(log_points) < 2:
-                return self._quadratic_interpolation(series)
-            
-            # Fit line in log space
-            for i in range(len(series)):
-                if result[i] is None:
-                    log_value = self._interpolate_log_linear(log_points, i)
-                    result[i] = math.exp(log_value)
-        
-        except (ValueError, OverflowError):
-            return self._quadratic_interpolation(series)
-        
-        return result
-    
-    def _find_best_triplet(self, valid_points, target_idx):
-        """Find the best triplet of points for quadratic fitting"""
-        if len(valid_points) < 3:
-            return None
-        
-        # Find triplet that best surrounds the target index
-        best_triplet = None
-        min_span = float('inf')
-        
-        for i in range(len(valid_points) - 2):
-            triplet = valid_points[i:i+3]
-            indices = [idx for idx, val in triplet]
-            
-            # Check if target is within or close to the span
-            span = max(indices) - min(indices)
-            if min(indices) <= target_idx <= max(indices):
-                if span < min_span:
-                    min_span = span
-                    best_triplet = triplet
-        
-        # If no containing triplet, find closest one
-        if not best_triplet:
-            distances = []
-            for i in range(len(valid_points) - 2):
-                triplet = valid_points[i:i+3]
-                center_idx = triplet[1][0]  # Middle point index
-                distance = abs(center_idx - target_idx)
-                distances.append((distance, triplet))
-            
-            best_triplet = min(distances)[1]
-        
-        return best_triplet
-    
-    def _quadratic_fit(self, triplet, target_idx):
-        """Fit quadratic through three points and evaluate at target"""
-        (x1, y1), (x2, y2), (x3, y3) = triplet
-        
-        # Solve for quadratic coefficients: y = ax² + bx + c
-        # Using Lagrange interpolation for stability
-        x = target_idx
-        
-        term1 = y1 * ((x - x2) * (x - x3)) / ((x1 - x2) * (x1 - x3))
-        term2 = y2 * ((x - x1) * (x - x3)) / ((x2 - x1) * (x2 - x3))
-        term3 = y3 * ((x - x1) * (x - x2)) / ((x3 - x1) * (x3 - x2))
-        
-        return term1 + term2 + term3
-    
-    def _detect_best_period(self, valid_points, potential_periods):
-        """Detect the best periodic pattern in the data"""
-        if len(valid_points) < 20:
-            return None
-        
-        best_period = None
-        best_score = -1
-        
-        for period in potential_periods:
-            if period >= len(valid_points) // 3:
-                continue
-            
-            score = self._calculate_periodicity_score(valid_points, period)
-            if score > best_score:
-                best_score = score
-                best_period = period
-        
-        return best_period if best_score > 0.3 else None
-    
-    def _calculate_periodicity_score(self, valid_points, period):
-        """Calculate how well the data fits a given period"""
-        correlations = []
-        
-        for i in range(len(valid_points) - period):
-            if i + period < len(valid_points):
-                val1 = valid_points[i][1]
-                val2 = valid_points[i + period][1]
-                correlations.append(val1 * val2)
-        
-        if not correlations:
-            return 0
-        
-        # Simple correlation measure
-        mean_corr = statistics.mean(correlations)
-        return min(1.0, max(0.0, mean_corr / (statistics.stdev(correlations) + 1e-6)))
-    
-    def _periodic_interpolation(self, series, valid_points, period):
-        """Interpolate using detected periodic pattern"""
-        result = [None] * len(series)
-        
-        # Fill known values
-        for idx, val in valid_points:
-            result[idx] = val
-        
-        # Use periodic pattern for interpolation
+        # Use periodic pattern
         for i in range(len(series)):
             if result[i] is None:
-                # Find corresponding point in previous/next cycles
-                cycle_values = []
+                # Look for values at same phase in other cycles
+                candidates = []
                 
                 for offset in [-period, period, -2*period, 2*period]:
                     ref_idx = i + offset
                     if 0 <= ref_idx < len(series):
                         for idx, val in valid_points:
                             if idx == ref_idx:
-                                cycle_values.append(val)
+                                candidates.append(val)
                                 break
                 
-                if cycle_values:
-                    result[i] = statistics.mean(cycle_values)
+                if candidates:
+                    result[i] = statistics.mean(candidates)
                 else:
-                    # Fall back to linear interpolation
+                    # Fallback to linear
                     linear_result = self._linear_interpolation(series)
                     result[i] = linear_result[i]
         
         return result
     
-    def _interpolate_log_linear(self, log_points, target_idx):
-        """Linear interpolation in log space"""
-        if len(log_points) < 2:
-            return 0
-        
-        # Find surrounding points
-        left_point = None
-        right_point = None
-        
-        for idx, log_val in log_points:
-            if idx < target_idx:
-                left_point = (idx, log_val)
-            elif idx > target_idx and right_point is None:
-                right_point = (idx, log_val)
-                break
-        
-        if left_point and right_point:
-            x1, y1 = left_point
-            x2, y2 = right_point
-            t = (target_idx - x1) / (x2 - x1)
-            return y1 + t * (y2 - y1)
-        elif left_point:
-            return left_point[1]
-        elif right_point:
-            return right_point[1]
-        else:
-            return statistics.mean([log_val for idx, log_val in log_points])
-    
-    def _extrapolate_linear(self, valid_points, target_idx, direction):
-        """Extrapolate using linear trend"""
-        if len(valid_points) < 2:
-            return valid_points[0][1] if valid_points else 0
-        
-        if direction == 'forward':
-            # Use last two points
-            (x1, y1), (x2, y2) = valid_points[-2:]
-        else:
-            # Use first two points
-            (x1, y1), (x2, y2) = valid_points[:2]
-        
-        slope = (y2 - y1) / (x2 - x1)
-        return y2 + slope * (target_idx - x2)
-    
-    def _fallback_fill(self, series, valid_points):
-        """Simple fallback for edge cases"""
-        if not valid_points:
-            return [0.0] * len(series)
-        elif len(valid_points) == 1:
-            return [valid_points[0][1]] * len(series)
-        else:
-            return self._linear_interpolation(series)
-    
-    def _evaluate_method(self, series, method_name):
-        """
-        Evaluate method quality using cross-validation
-        Hides some known points and measures prediction accuracy
-        """
+    def _exponential_interpolation(self, series):
+        """Fast exponential interpolation"""
         valid_points = self._get_valid_points(series)
-        if len(valid_points) < 10:
-            return float('inf')
+        if len(valid_points) < 3:
+            return self._linear_interpolation(series)
         
-        # Hide 20% of points for testing
-        test_size = max(1, len(valid_points) // 5)
-        test_indices = set(range(0, len(valid_points), max(1, len(valid_points) // test_size)))
+        # Check if all values are positive
+        values = [val for idx, val in valid_points]
+        if min(values) <= 0:
+            return self._quadratic_interpolation(series)
         
-        # Create test series with some points hidden
-        test_series = series.copy()
-        true_values = {}
+        result = [None] * len(series)
         
-        for i, (idx, val) in enumerate(valid_points):
-            if i in test_indices:
-                test_series[idx] = None
-                true_values[idx] = val
+        # Fill known values
+        for idx, val in valid_points:
+            result[idx] = val
         
-        # Impute and calculate error
         try:
-            method = self.methods[method_name]
-            imputed = method(test_series)
+            # Simple exponential fit using first and last points
+            x1, y1 = valid_points[0]
+            x2, y2 = valid_points[-1]
             
-            errors = []
-            for idx, true_val in true_values.items():
-                pred_val = imputed[idx]
-                if pred_val is not None:
-                    errors.append(abs(pred_val - true_val))
+            if y1 > 0 and y2 > 0:
+                # Calculate growth rate
+                growth_rate = (y2 / y1) ** (1.0 / (x2 - x1))
+                
+                # Fill missing values
+                for i in range(len(series)):
+                    if result[i] is None:
+                        result[i] = y1 * (growth_rate ** (i - x1))
+            else:
+                return self._quadratic_interpolation(series)
+                
+        except (ValueError, OverflowError, ZeroDivisionError):
+            return self._quadratic_interpolation(series)
+        
+        return result
+    
+    def _detect_period_fast(self, valid_points):
+        """Fast period detection using autocorrelation"""
+        if len(valid_points) < 20:
+            return None
+        
+        values = [val for idx, val in valid_points]
+        
+        # Test common periods
+        for period in [5, 10, 20, 50]:
+            if period >= len(values) // 2:
+                continue
             
-            return statistics.mean(errors) if errors else float('inf')
+            # Simple correlation check
+            correlations = []
+            for i in range(len(values) - period):
+                correlations.append(values[i] * values[i + period])
             
-        except Exception:
-            return float('inf')
+            if correlations:
+                mean_corr = statistics.mean(correlations)
+                if mean_corr > 0.5:  # Simple threshold
+                    return period
+        
+        return None
     
     def impute_series(self, series):
-        """
-        Main imputation method - tries multiple approaches and picks the best
-        """
+        """Main imputation with fast heuristic method selection"""
         valid_points = self._get_valid_points(series)
         
-        # Handle trivial cases
+        # Handle edge cases
         if len(valid_points) == 0:
             return [0.0] * len(series)
         elif len(valid_points) == len(series):
-            return series  # No missing values
+            return series
+        elif len(valid_points) == 1:
+            return [valid_points[0][1]] * len(series)
         
-        # For small datasets, use simple linear interpolation
-        if len(valid_points) < 5:
-            return self._linear_interpolation(series)
+        # Fast pattern analysis
+        pattern_type, confidence = self._analyze_pattern(valid_points)
         
-        # Evaluate different methods (sample-based for speed)
-        method_errors = {}
-        
-        # Always test linear (fast and reliable)
-        method_errors['linear'] = self._evaluate_method(series, 'linear')
-        
-        # Test other methods based on data characteristics
-        values = [val for idx, val in valid_points]
-        value_range = max(values) - min(values)
-        
-        # Test quadratic for curved patterns
-        if value_range > 0.1:  # Only if there's significant variation
-            method_errors['quadratic'] = self._evaluate_method(series, 'quadratic')
-        
-        # Test moving average for noisy data
-        if len(valid_points) >= 10:
-            method_errors['moving_average'] = self._evaluate_method(series, 'moving_average')
-        
-        # Test seasonal for longer series
-        if len(valid_points) >= 20:
-            method_errors['seasonal'] = self._evaluate_method(series, 'seasonal')
-        
-        # Test exponential for growth patterns
-        if all(v > 0 for v in values) and max(values) / min(values) > 2:
-            method_errors['exponential'] = self._evaluate_method(series, 'exponential')
-        
-        # Pick best method
-        best_method = min(method_errors, key=method_errors.get)
-        
-        # Apply best method
+        # Apply appropriate method based on pattern
         try:
-            result = self.methods[best_method](series)
+            if pattern_type == 'exponential' and confidence > 0.7:
+                result = self._exponential_interpolation(series)
+            elif pattern_type == 'seasonal' and confidence > 0.5:
+                result = self._seasonal_interpolation(series)
+            elif pattern_type == 'quadratic' and confidence > 0.6:
+                result = self._quadratic_interpolation(series)
+            else:
+                result = self._linear_interpolation(series)
             
-            # Ensure no None values remain
+            # Ensure no None values
             for i in range(len(result)):
                 if result[i] is None:
-                    # Use linear interpolation as final fallback
-                    linear_result = self._linear_interpolation(series)
-                    result[i] = linear_result[i] if linear_result[i] is not None else 0.0
+                    # Final fallback
+                    if valid_points:
+                        result[i] = statistics.mean([val for idx, val in valid_points])
+                    else:
+                        result[i] = 0.0
             
             return result
             
@@ -469,8 +323,8 @@ class MarketSignalImputer:
             # Ultimate fallback
             return self._linear_interpolation(series)
 
-# Initialize the imputer
-imputer = MarketSignalImputer()
+# Initialize imputer
+imputer = FastImputer()
 
 @app.route('/blankety', methods=['POST'])
 def blankety_blanks():
