@@ -1,4 +1,5 @@
-from flask import request, jsonify
+from flask import Flask, request, jsonify
+import re # For regular expressions, useful for tokenizing and cleaning
 
 from routes import app
 
@@ -22,7 +23,7 @@ def roman_to_int(s: str) -> int:
         prev_val = curr_val
     return result
 
-# English words to Integer mapping (limited for common words)
+# English words to Integer mapping (expanded for more coverage)
 ENGLISH_MAP = {
     "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
     "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
@@ -30,152 +31,185 @@ ENGLISH_MAP = {
     "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
     "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
     "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80,
-    "ninety": 90, "hundred": 100, "thousand": 1000, "million": 1000000
+    "ninety": 90
+}
+ENGLISH_MAGNITUDES = {
+    "hundred": 100, "thousand": 1000, "million": 1000000, "billion": 1000000000
 }
 
 def english_to_int(s: str) -> int:
-    """Converts an English number string to an integer."""
-    words = s.replace('-', ' ').lower().split()
-    current_num = 0
-    total_num = 0
+    """
+    Converts an English number string to an integer.
+    Handles compound numbers and magnitudes.
+    """
+    s = s.replace('-', ' ').lower()
+    words = [word for word in s.split() if word not in ["and"]] # "and" is often ignored in parsing
+    
+    total = 0
+    current_number = 0
+    
     for word in words:
         if word in ENGLISH_MAP:
-            val = ENGLISH_MAP[word]
-            if val >= 1000:
-                total_num += current_num * val
-                current_num = 0
-            elif val >= 100:
-                current_num *= val
-            else:
-                current_num += val
-        elif word == "and": # Ignore "and"
+            current_number += ENGLISH_MAP[word]
+        elif word in ENGLISH_MAGNITUDES:
+            magnitude_val = ENGLISH_MAGNITUDES[word]
+            if magnitude_val > 100: # For thousands, millions, etc.
+                total += current_number * magnitude_val
+                current_number = 0
+            else: # For hundreds
+                current_number *= magnitude_val
+        else:
+            # Handle cases like "one hundred twenty" where "twenty" adds to current_number
+            # If `current_number` holds a multiple of 100 (e.g., from "one hundred"),
+            # then subsequent words like "twenty" should add to it.
+            # This simplified logic might need further refinement for complex phrases.
             pass
-        # Handle cases like "one thousand one hundred" where "one hundred" isn't 100 * 1000
-        # This simplification assumes no "million" or higher for now, can be extended.
-    return total_num + current_num
+            
+    return total + current_number
 
-# German words to Integer mapping (simplified for common words and structure)
-GERMAN_MAP = {
-    "null": 0, "eins": 1, "zwei": 2, "drei": 3, "vier": 4, "fünf": 5,
-    "sechs": 6, "sieben": 7, "acht": 8, "neun": 9, "zehn": 10,
-    "elf": 11, "zwölf": 12, "dreizehn": 13, "vierzehn": 14,
+# German words to Integer mapping (expanded and refined)
+GERMAN_MAP_UNITS = {
+    "null": 0, "ein": 1, "eins": 1, "zwei": 2, "drei": 3, "vier": 4, "fünf": 5,
+    "sechs": 6, "sieben": 7, "acht": 8, "neun": 9
+}
+GERMAN_MAP_TEENS = {
+    "zehn": 10, "elf": 11, "zwölf": 12, "dreizehn": 13, "vierzehn": 14,
     "fünfzehn": 15, "sechzehn": 16, "siebzehn": 17, "achtzehn": 18,
-    "neunzehn": 19, "zwanzig": 20, "dreißig": 30, "vierzig": 40,
-    "fünfzig": 50, "sechzig": 60, "siebzig": 70, "achtzig": 80,
-    "neunzig": 90, "hundert": 100, "tausend": 1000, "und": 0 # 'und' acts as separator
+    "neunzehn": 19
+}
+GERMAN_MAP_TENS = {
+    "zwanzig": 20, "dreißig": 30, "vierzig": 40, "fünfzig": 50,
+    "sechzig": 60, "siebzig": 70, "achtzig": 80, "neunzig": 90
+}
+GERMAN_MAP_MAGNITUDES = {
+    "hundert": 100, "tausend": 1000, "million": 1000000, "milliarde": 1000000000
 }
 
 def german_to_int(s: str) -> int:
-    """Converts a German number string to an integer. Simplified for common patterns."""
-    s = s.lower().replace("ß", "ss") # Handle eszett
-    words = s.split() # Split by space
+    """
+    Converts a German number string to an integer.
+    Handles concatenated words (e.g., "siebenundachtzig") and magnitudes.
+    """
+    s = s.lower().replace("ß", "ss").replace("-", "") # Normalize
     
-    # German numbers often combine units and tens, e.g., "siebenundachtzig" (seven and eighty)
-    # This simplified approach tries to parse directly or handle 'und'
-    current_num = 0
-    total_num = 0
-    
-    # For common single-word numbers or simple structures
-    if s in GERMAN_MAP:
-        return GERMAN_MAP[s]
-    
-    # Try to parse concatenated numbers like "siebenundachtzig"
-    parts = s.split('und')
-    if len(parts) == 2:
-        try:
-            unit = GERMAN_MAP.get(parts[0], 0)
-            ten_suffix = parts[1]
-            for prefix, val in GERMAN_MAP.items():
-                if ten_suffix.startswith(prefix) and val >= 20:
-                    ten = val
-                    return ten + unit # e.g., eighty + seven
-            return GERMAN_MAP.get(s, 0) # Fallback if not standard unit-und-ten
-        except:
-            pass # Continue to more general parsing if this fails
+    total = 0
+    current_segment = 0 # Holds the value of the current "block" (e.g., up to 999)
+    last_magnitude = 1 # To handle e.g. "zwei millionen fünf hundert tausend"
 
-    # More general parsing for multi-word numbers
-    temp_sum = 0
+    # Pre-parse concatenated numbers like "siebenundachtzig"
+    # This is a common pattern: units-und-tens (e.g., sieben-und-achtzig = 7 + 80 = 87)
+    # This loop needs to be careful not to over-split for numbers like "einhundert"
+    
+    # Simple direct lookups for common single words that are exceptions or key examples
+    if s in GERMAN_MAP_UNITS: return GERMAN_MAP_UNITS[s]
+    if s in GERMAN_MAP_TEENS: return GERMAN_MAP_TEENS[s]
+    if s in GERMAN_MAP_TENS: return GERMAN_MAP_TENS[s]
+    
+    # Handle numbers that are often fully concatenated (like "dreihundertelf")
+    # This requires a more programmatic approach than just splitting by spaces/und.
+    # For now, let's try to parse parts.
+    
+    # First, handle 'und' for units-and-tens (e.g., "siebenundachtzig")
+    if 'und' in s:
+        parts = s.split('und')
+        if len(parts) == 2:
+            unit_part = parts[0]
+            ten_part = parts[1]
+            unit_val = GERMAN_MAP_UNITS.get(unit_part, 0)
+            
+            # Find the tens value from the ten_part string
+            ten_val = 0
+            for k, v in GERMAN_MAP_TENS.items():
+                if ten_part.endswith(k) and len(ten_part) == len(k): # Exact match for ten part like "achtzig"
+                    ten_val = v
+                    break
+            
+            if unit_val > 0 and ten_val > 0:
+                return ten_val + unit_val # e.g., 80 + 7 = 87
+    
+    # Now, parse numbers that can be constructed sequentially or with magnitudes
+    # Split the string into potential number words.
+    words = re.findall(r'[a-zäöüß]+', s) # Get all alphabetic sequences
+    
     for word in words:
-        if word in GERMAN_MAP:
-            val = GERMAN_MAP[word]
-            if word == "und": # Handle 'und' in multi-word numbers, e.g., "ein hundert und fünf"
-                total_num += temp_sum
-                temp_sum = 0
-            elif val >= 1000:
-                total_num += temp_sum * val
-                temp_sum = 0
-            elif val >= 100:
-                temp_sum *= val
-            else:
-                temp_sum += val
-        elif word.endswith("und"): # Handle numbers like "siebenund" followed by tens
-             temp_sum += GERMAN_MAP.get(word[:-3], 0) # get value of "sieben"
-        else:
-            # Handle direct lookups for concatenated numbers (e.g., "dreihundertelf")
-            # This is a bit tricky as "dreihundertelf" is not "drei hundert elf"
-            # We'll try to find known parts within the word.
-            # For simplicity, we assume "dreihundertelf" is recognized as a whole if possible.
-            pass # Unrecognized part
-    
-    # A more robust German parser would need to handle concatenation rules more explicitly.
-    # For competitive programming, this might be a simplification based on common examples.
-    
-    # Handle concatenated words like "dreihundertelf"
-    # This is a very basic approach and might not cover all cases.
-    if s == "dreihundertelf": return 311
-    if s == "siebenundachtzig": return 87
+        if word in GERMAN_MAP_UNITS:
+            current_segment += GERMAN_MAP_UNITS[word]
+        elif word in GERMAN_MAP_TEENS:
+            current_segment += GERMAN_MAP_TEENS[word]
+        elif word in GERMAN_MAP_TENS:
+            current_segment += GERMAN_MAP_TENS[word]
+        elif word in GERMAN_MAP_MAGNITUDES:
+            magnitude_val = GERMAN_MAP_MAGNITUDES[word]
+            if magnitude_val == 100: # Hundert
+                if current_segment == 0: current_segment = 1 # "hundert" implies "ein hundert"
+                current_segment *= magnitude_val
+            else: # Tausend, Millionen, etc.
+                total += current_segment * magnitude_val
+                current_segment = 0
+                last_magnitude = magnitude_val # Update last magnitude
+        elif word == "ein" and current_segment == 0: # special case for "ein hundert", "ein tausend"
+             current_segment = 1
+        
+    return total + current_segment # Add the final segment
 
-    return total_num + temp_sum
-
-# Chinese characters to Integer mapping and conversion logic
+# Chinese characters to Integer mapping and conversion logic (refined)
 CHINESE_NUMERALS = {
     '零': 0, '〇': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
     '六': 6, '七': 7, '八': 8, '九': 9, '十': 10, '百': 100,
-    '千': 1000, '萬': 10000, '億': 100000000, # Traditional
-    '万': 10000, '亿': 100000000 # Simplified
+    '千': 1000, '萬': 10000, '亿': 100000000, # Simplified + common '亿'
+    '万': 10000, '億': 100000000 # Traditional + common '萬'
 }
 
 def chinese_to_int(s: str) -> int:
-    """Converts a Chinese number string (Traditional or Simplified) to an integer."""
+    """
+    Converts a Chinese number string (Traditional or Simplified) to an integer.
+    Handles magnitudes and standard Chinese number structures.
+    """
     result = 0
-    current_unit = 1 # Represents the current magnitude (e.g., 1, 10, 100, 1000)
-    temp_num = 0     # Stores the number before multiplying by a unit (e.g., '五' in '五千')
+    current_chunk = 0 # Value of the current 'segment' (e.g., 4321 in 54321)
+    # The current_chunk handles numbers up to '千' (1000) within a '萬' or '億' block.
     
-    # Reverse the string to process from right to left (for easier multiplication)
-    # For Chinese, it's often easier to process left to right with a stack or state machine
-    # Let's try processing left to right.
+    # Magnitude to multiply current_chunk by before adding to result
+    # For example, if we see '萬', current_chunk is multiplied by 10000
     
-    # Example: "五萬四千三百二十一" -> 54321
-    # Example: "四十五" -> 45
+    temp_num = 0 # Stores the value of individual digits or small multiples (e.g., '四' in '四千')
     
-    total = 0
-    current_section = 0
-    unit_multiplier = 1 # For 万, 億 sections
-
+    # This logic needs to be stateful. Process characters one by one.
+    
+    # High-level multipliers (万/萬, 亿/億)
+    high_multiplier = 1
+    
     for char in s:
         if char in CHINESE_NUMERALS:
             val = CHINESE_NUMERALS[char]
-            if val < 10: # A digit (0-9)
-                current_section += val
-            elif val == 10: # 十 (ten)
-                if current_section == 0: # Implied '一十' e.g. "十" -> 10
-                    current_section = 1
-                current_section *= val
-            elif val == 100: # 百 (hundred)
-                current_section *= val
-            elif val == 1000: # 千 (thousand)
-                current_section *= val
-            elif val == 10000 or val == 100000000: # 萬/万 (ten thousand), 億/亿 (hundred million)
-                total += current_section * val
-                current_section = 0 # Reset for the next section (e.g., after 萬)
-                unit_multiplier = val # Keep track of the large unit
+            if 0 <= val <= 9: # Digits
+                temp_num = val
+            elif val == 10: # 十
+                if temp_num == 0: # Cases like "十" (10)
+                    temp_num = 1
+                current_chunk += temp_num * val
+                temp_num = 0
+            elif val == 100: # 百
+                if temp_num == 0: temp_num = 1 # Cases like "百" (implied "一百")
+                current_chunk += temp_num * val
+                temp_num = 0
+            elif val == 1000: # 千
+                if temp_num == 0: temp_num = 1 # Cases like "千" (implied "一千")
+                current_chunk += temp_num * val
+                temp_num = 0
+            elif val == 10000 or val == 100000000: # 萬/万, 億/亿
+                # Add the accumulated chunk to the result, multiplied by the current high_multiplier
+                result += (current_chunk + temp_num) * val
+                current_chunk = 0
+                temp_num = 0
+                high_multiplier = val # Update the high multiplier (not directly used in this logic, but conceptually)
         else:
-            # Handle cases where a number might be mixed or contain unrecognized chars
-            # For this problem, we assume valid inputs
+            # Unrecognized character, should not happen with valid input.
             pass
             
-    return total + current_section # Add the last processed section
-
+    # Add any remaining value in current_chunk or temp_num
+    result += current_chunk + temp_num
+    return result
 
 # --- Language Type Detection and Value Mapping ---
 
@@ -194,83 +228,95 @@ def get_number_info(num_str: str):
     Determines the type and integer value of a number string.
     Returns (integer_value, language_type_string).
     """
+    original_num_str = num_str # Keep original for potential errors/logging
     num_str = num_str.strip()
 
     # 1. Arabic Numerals
-    if num_str.isdigit():
-        return int(num_str), "arabic"
-    if num_str.startswith('-') and num_str[1:].isdigit(): # Handle negative Arabic
+    if num_str.isdigit() or (num_str.startswith('-') and num_str[1:].isdigit()):
         return int(num_str), "arabic"
 
-    # 2. Roman Numerals (Check for common Roman chars and no digits)
-    if all(c in ROMAN_MAP for c in num_str.upper()) and not any(c.isdigit() for c in num_str):
-        try:
-            return roman_to_int(num_str.upper()), "roman"
-        except:
-            pass # Fall through if not a valid Roman numeral after all
+    # 2. Roman Numerals
+    # Check if all chars are Roman and it's not empty, and ensure it's not a mixed string
+    # A more robust check might involve regex for valid Roman numeral patterns.
+    is_roman = True
+    if num_str and all(c in ROMAN_MAP for c in num_str.upper()):
+        for char in num_str:
+            if not char.isalpha(): # Ensure no numbers or other symbols
+                is_roman = False
+                break
+        if is_roman:
+            try:
+                return roman_to_int(num_str.upper()), "roman"
+            except:
+                pass # Conversion failed, not a valid Roman numeral
 
-    # 3. Chinese (Check for common Chinese numeral characters)
-    # We need to distinguish Traditional vs Simplified if possible, but the problem statement
-    # implies we just need to detect "Chinese" and then prioritize based on specific chars.
-    # For now, let's just check for any Chinese numeral characters.
+    # 3. Chinese (Traditional/Simplified)
     contains_chinese_chars = any(c in CHINESE_NUMERALS for c in num_str)
-    
     if contains_chinese_chars:
-        # Simple heuristic for Traditional vs Simplified for tie-breaking
-        # '萬' (Traditional) vs '万' (Simplified)
-        if '萬' in num_str and '万' not in num_str:
-            return chinese_to_int(num_str), "traditional_chinese"
-        elif '万' in num_str and '萬' not in num_str:
-            return chinese_to_int(num_str), "simplified_chinese"
-        # If both or neither, make an educated guess or default
-        # For simplicity, if it contains any, we'll try to convert
+        # Check for specific characters to differentiate for tie-breaking
+        has_traditional_wan = '萬' in num_str
+        has_simplified_wan = '万' in num_str
+
         try:
-            # A more robust solution would require a proper character set check or external library
-            # For now, if '萬' is present, prioritize Traditional. Else, Simplified if '万'.
-            # If neither, it's ambiguous, let's assume one.
-            if '萬' in num_str:
-                return chinese_to_int(num_str), "traditional_chinese"
-            elif '万' in num_str:
-                return chinese_to_int(num_str), "simplified_chinese"
-            # Default to simplified if it has Chinese chars but no specific '万'/'萬'
-            elif contains_chinese_chars:
-                return chinese_to_int(num_str), "simplified_chinese" # Default to simplified if ambiguous
-        except:
+            val = chinese_to_int(num_str)
+            if has_traditional_wan and not has_simplified_wan:
+                return val, "traditional_chinese"
+            elif has_simplified_wan and not has_traditional_wan:
+                return val, "simplified_chinese"
+            elif has_traditional_wan and has_simplified_wan: # Ambiguous, prioritize traditional if both are present
+                return val, "traditional_chinese"
+            else: # No specific '万' or '萬', but definitely Chinese characters
+                # Default to simplified if ambiguous, or use another heuristic
+                # For this problem, let's assume if it's Chinese characters, one of these will be sufficient.
+                # If numbers like '一二三' are given without units, they are ambiguous.
+                # Assuming the challenge inputs will provide enough context.
+                return val, "simplified_chinese" # Default if no specific wan/wan
+        except Exception as e:
+            # print(f"Chinese conversion failed for '{num_str}': {e}")
             pass
 
-    # 4. English Words (Check for common English number words)
-    # This check needs to be more robust than just checking for any word in ENGLISH_MAP
-    # as other languages might contain similar substrings.
-    # A simple approach: if it contains "one", "two", "hundred", etc., and no German/Roman/Chinese.
-    english_words_present = any(word in num_str.lower().split() for word in ENGLISH_MAP)
+    # 4. English Words
+    # Stronger check: look for common English number words and avoid German/Roman
+    # Use a regex to look for typical English number word patterns, separated by spaces/hyphens
+    english_keywords = set(ENGLISH_MAP.keys()).union(set(ENGLISH_MAGNITUDES.keys()))
+    words = re.findall(r'[a-z]+', num_str.lower())
     
-    if english_words_present:
-        # Check if it *looks* like English and not German or Roman.
-        # This is a weak heuristic but works for distinct examples.
-        if "one" in num_str.lower() or "hundred" in num_str.lower(): # Stronger English indicators
-            try:
-                return english_to_int(num_str), "english"
-            except:
-                pass
+    is_likely_english = False
+    if len(words) > 0 and any(word in english_keywords for word in words):
+        # Basic check to avoid misclassifying German or Roman
+        if not any(c in 'äöüß' for c in num_str.lower()) and not any(c in ROMAN_MAP for c in num_str.upper()):
+            is_likely_english = True
+            
+    if is_likely_english:
+        try:
+            return english_to_int(num_str), "english"
+        except Exception as e:
+            # print(f"English conversion failed for '{num_str}': {e}")
+            pass
 
-    # 5. German Words (Check for common German number words)
-    # Similar to English, need robust check.
-    german_words_present = any(word in num_str.lower().replace("ß", "ss") for word in GERMAN_MAP)
-    if german_words_present:
-        # "und" is a strong indicator for German
-        if "und" in num_str.lower() or "hundert" in num_str.lower(): # Stronger German indicators
-            try:
-                return german_to_int(num_str), "german"
-            except:
-                pass
+    # 5. German Words
+    # Check for strong German indicators (e.g., "und", "hundert", umlauts, eszett)
+    # Be careful not to misclassify "one hundred" as German "ein hundert"
+    german_keywords = set(GERMAN_MAP_UNITS.keys()).union(set(GERMAN_MAP_TEENS.keys())).union(
+                        set(GERMAN_MAP_TENS.keys())).union(set(GERMAN_MAP_MAGNITUDES.keys()))
+    words_german = re.findall(r'[a-zäöüß]+', num_str.lower().replace("ß", "ss"))
     
-    # Fallback: If none of the above, it's likely an Arabic numeral or an unrecognized format.
-    # Given the problem constraints, it should fit one of the types.
-    # This should ideally not be reached if inputs are strictly as defined.
-    try:
-        return int(num_str), "arabic" # Last resort, try converting to int directly
-    except ValueError:
-        return 0, "unknown" # Should not happen with valid inputs
+    is_likely_german = False
+    if len(words_german) > 0 and any(word in german_keywords for word in words_german):
+        # More specific German checks: "und" in combined words, umlauts, eszett
+        if 'und' in num_str.lower() or any(c in 'äöüß' for c in num_str.lower()):
+            is_likely_german = True
+            
+    if is_likely_german:
+        try:
+            return german_to_int(num_str), "german"
+        except Exception as e:
+            # print(f"German conversion failed for '{num_str}': {e}")
+            pass
+
+    # Fallback for unexpected cases (should ideally not be reached if inputs conform)
+    raise ValueError(f"Could not parse number: {original_num_str}")
+
 
 # --- Flask Endpoint ---
 
@@ -280,39 +326,34 @@ def duolingo_sort():
     part = data['part']
     unsorted_list = data['challengeInput']['unsortedList']
 
-    if part == "ONE":
-        # Part 1: Sort Arabic and Roman, return as Arabic numeral strings
-        processed_list = []
-        for item in unsorted_list:
-            val, _ = get_number_info(item)
-            processed_list.append(val)
-        
-        processed_list.sort()
-        sorted_list_str = [str(x) for x in processed_list]
-        
-        return jsonify({"sortedList": sorted_list_str})
+    try:
+        if part == "ONE":
+            processed_list = []
+            for item in unsorted_list:
+                val, _ = get_number_info(item)
+                processed_list.append(val)
+            
+            processed_list.sort()
+            sorted_list_str = [str(x) for x in processed_list]
+            
+            return jsonify({"sortedList": sorted_list_str})
 
-    elif part == "TWO":
-        # Part 2: Sort all languages, maintain original format, apply tie-breaking
-        
-        # Create a list of tuples: (integer_value, representation_order, original_string)
-        # This allows Python's default sort to handle the tie-breaking naturally.
-        items_to_sort = []
-        for item_str in unsorted_list:
-            int_val, lang_type = get_number_info(item_str)
-            rep_order = REPRESENTATION_ORDER.get(lang_type, 999) # Assign a high number for unknown
-            items_to_sort.append((int_val, rep_order, item_str))
-        
-        # Sort based on:
-        # 1. Integer value (ascending)
-        # 2. Representation order (ascending - Roman=0, English=1, etc.)
-        items_to_sort.sort()
-        
-        # Extract the original strings in sorted order
-        sorted_list_original_format = [item[2] for item in items_to_sort]
-        
-        return jsonify({"sortedList": sorted_list_original_format})
+        elif part == "TWO":
+            items_to_sort = []
+            for item_str in unsorted_list:
+                int_val, lang_type = get_number_info(item_str)
+                rep_order = REPRESENTATION_ORDER.get(lang_type, 999) # Default to high priority for safety
+                items_to_sort.append((int_val, rep_order, item_str))
+            
+            items_to_sort.sort() # Sorts by int_val then rep_order
+            
+            sorted_list_original_format = [item[2] for item in items_to_sort]
+            
+            return jsonify({"sortedList": sorted_list_original_format})
 
-    else:
-        return jsonify({"error": "Invalid part specified. Use 'ONE' or 'TWO'."}), 400
-
+        else:
+            return jsonify({"error": "Invalid part specified. Use 'ONE' or 'TWO'."}), 400
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500

@@ -1,11 +1,10 @@
-from flask import Flask, request, jsonify
+from flask import request, jsonify
 import json
 import math
 from typing import List, Tuple, Dict, Optional, Set
 from collections import deque
 from enum import Enum
-
-app = Flask(__name__)
+from routes import app
 
 class Direction(Enum):
     NORTH = 0
@@ -24,26 +23,35 @@ class MicromouseController:
         self.visited = set()
         self.goal_cells = {(7,7), (7,8), (8,7), (8,8)}
         
-        # Mouse state - CORRECTED: starts at (0,15) top-left, goal is center
-        self.x, self.y = 0, 15  # Start at top-left corner
-        self.direction = Direction.NORTH  # Facing up initially
+        # Mouse state - starts at bottom-left (0,0), facing North
+        self.x, self.y = 0, 0  # Actually start at bottom-left!
+        self.direction = Direction.NORTH  # Facing North (toward positive Y)
         self.momentum = 0
-        
-        # Movement tracking
-        self.last_instruction = None
-        self.pending_movement = None
         
         # Strategy state
         self.current_strategy = "explore"
         self.runs_completed = 0
         self.last_run = -1
         self.move_count = 0
+        self.stuck_counter = 0
+        
+        # Add boundary walls
+        self.add_boundary_walls()
         
         # Flood fill distances
         self.distances = [[float('inf') for _ in range(16)] for _ in range(16)]
         self.update_flood_fill()
         
         print(f"Controller initialized. Start: ({self.x},{self.y}), Goal cells: {self.goal_cells}")
+
+    def add_boundary_walls(self):
+        """Add walls around the maze boundary"""
+        for i in range(16):
+            # Boundary walls - these prevent moving outside the maze
+            self.walls.add((i, 15, i, 16))   # Top boundary (y=16)
+            self.walls.add((i, -1, i, 0))    # Bottom boundary (y=-1)
+            self.walls.add((-1, i, 0, i))    # Left boundary (x=-1)
+            self.walls.add((15, i, 16, i))   # Right boundary (x=16)
 
     def process_request(self, data: dict) -> dict:
         """Main controller logic"""
@@ -61,42 +69,37 @@ class MicromouseController:
         self.momentum = momentum
         
         print(f"\n=== REQUEST {self.move_count} ===")
-        print(f"Position: ({self.x},{self.y}), Momentum: {momentum}, Goal reached: {goal_reached}, Run: {run}")
-        print(f"Sensors: {sensor_data} (L45, L, Forward, R, R45)")
+        print(f"Position: ({self.x},{self.y}), Momentum: {momentum}, Direction: {self.direction.name}")
+        print(f"Goal reached: {goal_reached}, Run: {run}")
+        print(f"Sensors: {sensor_data} (L90, L45, Forward, R45, R90)")
         self.move_count += 1
         
-        # Handle run changes
+        # Handle run changes (reset to start)
         if run > self.last_run:
             print(f"New run detected: {run}")
             self.last_run = run
             if run > 0:
                 self.runs_completed += 1
-            # Reset to start position (top-left)
-            self.x, self.y = 0, 15
+            # Reset to start position
+            self.x, self.y = 0, 0
             self.direction = Direction.NORTH
-            print(f"Reset to start position (0,15)")
+            self.stuck_counter = 0
+            print(f"Reset to start position (0,0)")
         
         # Update walls based on sensor data
         self.update_walls_from_sensors(sensor_data)
         self.visited.add((self.x, self.y))
         
-        # Strategy decision
-        if self.runs_completed >= 2 and best_time_ms is not None:
-            self.current_strategy = "speed_run"
-        elif total_time_ms > 200000:
-            self.current_strategy = "speed_run"
-        
-        print(f"Strategy: {self.current_strategy}")
-        
         # Check if we should end
-        if total_time_ms > 290000:
-            print("Time limit approaching, ending")
+        if total_time_ms > 290000 or self.stuck_counter > 20:
+            print("Time limit or stuck too long, ending")
             return {"instructions": [], "end": True}
         
         # Handle goal reached
         if goal_reached:
             print("Goal reached! Updating flood fill")
             self.update_flood_fill()
+            self.stuck_counter = 0
             return {"instructions": [], "end": False}
         
         # Generate movement instructions
@@ -106,42 +109,44 @@ class MicromouseController:
         return {"instructions": instructions, "end": False}
 
     def update_walls_from_sensors(self, sensor_data: List[int]):
-        """Update wall map based on sensor data"""
-        # Sensors: [-90°, -45°, 0°, +45°, +90°] relative to mouse direction
-        # Let's be more careful about wall placement
+        """Update wall map based on sensor data - ONLY add walls where sensors detect them"""
         
-        directions = ['L90', 'L45', 'Forward', 'R45', 'R90']
+        # Sensor directions relative to current facing direction
+        # [-90°, -45°, 0°, +45°, +90°]
+        relative_angles = [-2, -1, 0, 1, 2]
+        sensor_names = ['L90', 'L45', 'Forward', 'R45', 'R90']
         
         for i, has_wall in enumerate(sensor_data):
             if has_wall:
-                # Calculate the direction the sensor is pointing
-                sensor_angle = (self.direction.value + [-2, -1, 0, 1, 2][i]) % 8
+                # Calculate absolute direction of this sensor
+                sensor_direction = (self.direction.value + relative_angles[i]) % 8
                 
-                # Get the adjacent cell in that direction
-                dx, dy = self.get_direction_delta(sensor_angle)
-                adj_x, adj_y = self.x + dx, self.y + dy
+                # Get the cell this sensor is looking toward
+                dx, dy = self.get_direction_delta(sensor_direction)
+                adjacent_x = self.x + dx
+                adjacent_y = self.y + dy
                 
-                # Only add wall if the adjacent cell would be in bounds
-                # Wall is between current cell and adjacent cell
-                if 0 <= adj_x < 16 and 0 <= adj_y < 16:
-                    wall = (min(self.x, adj_x), min(self.y, adj_y), 
-                           max(self.x, adj_x), max(self.y, adj_y))
-                    self.walls.add(wall)
-                    print(f"Added internal wall {directions[i]}: {wall}")
+                # Only add walls for cells that are within the maze bounds
+                if 0 <= adjacent_x < 16 and 0 <= adjacent_y < 16:
+                    # There's a wall between current cell and the adjacent cell
+                    wall = (min(self.x, adjacent_x), min(self.y, adjacent_y), 
+                           max(self.x, adjacent_x), max(self.y, adjacent_y))
+                    if wall not in self.walls:
+                        self.walls.add(wall)
+                        print(f"Added wall {sensor_names[i]}: between ({self.x},{self.y}) and ({adjacent_x},{adjacent_y})")
                 else:
-                    # This is a boundary wall - expected
-                    print(f"Detected boundary wall {directions[i]} at ({adj_x},{adj_y})")
+                    print(f"Sensor {sensor_names[i]} detected boundary wall at ({adjacent_x},{adjacent_y})")
 
     def get_direction_delta(self, direction_value: int) -> Tuple[int, int]:
         """Get x,y delta for a direction value (0-7)"""
         deltas = [
-            (0, 1),   # 0: North
+            (0, 1),   # 0: North (+Y)
             (1, 1),   # 1: Northeast  
-            (1, 0),   # 2: East
+            (1, 0),   # 2: East (+X)
             (1, -1),  # 3: Southeast
-            (0, -1),  # 4: South
+            (0, -1),  # 4: South (-Y)
             (-1, -1), # 5: Southwest
-            (-1, 0),  # 6: West
+            (-1, 0),  # 6: West (-X)
             (-1, 1),  # 7: Northwest
         ]
         return deltas[direction_value % 8]
@@ -172,29 +177,42 @@ class MicromouseController:
         current_dist = self.distances[self.x][self.y]
         print(f"Current distance to goal: {current_dist}")
         
-        # Check all possible moves
+        # Find all possible moves
         possible_moves = []
-        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:  # N, E, S, W
+        cardinal_directions = [
+            (0, 1, "North"), 
+            (1, 0, "East"), 
+            (0, -1, "South"), 
+            (-1, 0, "West")
+        ]
+        
+        for dx, dy, name in cardinal_directions:
             target_x, target_y = self.x + dx, self.y + dy
+            
             if self.is_valid_move(self.x, self.y, target_x, target_y):
                 distance = self.distances[target_x][target_y]
                 is_unexplored = (target_x, target_y) not in self.visited
-                possible_moves.append((target_x, target_y, distance, is_unexplored))
-                print(f"Possible move to ({target_x},{target_y}): distance={distance}, unexplored={is_unexplored}")
+                possible_moves.append((target_x, target_y, distance, is_unexplored, name))
+                print(f"Can move {name} to ({target_x},{target_y}): distance={distance}, unexplored={is_unexplored}")
         
         if not possible_moves:
-            print("No valid moves found!")
-            # Try to turn and see if that helps
+            print("No valid moves available!")
+            self.stuck_counter += 1
+            
+            # Try to turn to see new areas
             if self.momentum == 0:
-                return ["R"]  # Turn to potentially see new areas
+                return ["R"]  # Turn right to explore
             else:
                 return ["F0"]  # Stop first
         
-        # Sort moves: unexplored first, then by distance to goal
-        possible_moves.sort(key=lambda x: (not x[3], x[2]))  # unexplored first, then shortest distance
+        # Reset stuck counter since we found moves
+        self.stuck_counter = 0
         
-        target_x, target_y, _, _ = possible_moves[0]
-        print(f"Selected move to: ({target_x}, {target_y})")
+        # Prioritize unexplored cells, then shortest distance to goal
+        possible_moves.sort(key=lambda x: (not x[3], x[2]))
+        
+        target_x, target_y, target_dist, is_unexplored, direction_name = possible_moves[0]
+        print(f"Selected: Move {direction_name} to ({target_x},{target_y}) - distance={target_dist}, unexplored={is_unexplored}")
         
         return self.move_toward_cell(target_x, target_y)
 
@@ -206,64 +224,62 @@ class MicromouseController:
         
         # Determine required direction
         target_direction = None
-        direction_name = ""
         if dx == 0 and dy == 1:
             target_direction = Direction.NORTH
-            direction_name = "North"
         elif dx == 1 and dy == 0:
             target_direction = Direction.EAST
-            direction_name = "East"
         elif dx == 0 and dy == -1:
             target_direction = Direction.SOUTH
-            direction_name = "South"
         elif dx == -1 and dy == 0:
             target_direction = Direction.WEST
-            direction_name = "West"
         else:
             print(f"Invalid move delta: ({dx}, {dy})")
             return ["F0"] if self.momentum != 0 else ["R"]
         
-        print(f"Need to move {direction_name}")
-        
-        # Calculate turn needed
+        # Calculate turn needed (in 45-degree increments)
         current_dir = self.direction.value
         target_dir = target_direction.value
         turn_needed = (target_dir - current_dir) % 8
         
-        print(f"Current facing: {self.direction.name} ({current_dir})")
-        print(f"Target facing: {target_direction.name} ({target_dir})")
-        print(f"Turn needed: {turn_needed} (45° increments)")
+        print(f"Current: {self.direction.name}({current_dir}), Target: {target_direction.name}({target_dir}), Turn: {turn_needed}")
         
         # If we need to turn, do it first (must be at momentum 0)
         if turn_needed != 0:
             if self.momentum != 0:
-                print("Need to stop before turning")
-                return ["F0"]  # Decelerate first
+                print("Must stop before turning")
+                return ["F0"]
             
-            # Turn toward target (each turn is 45°)
-            if turn_needed <= 4:
-                # Turn clockwise (right)
-                turns = turn_needed // 2  # Each R is 45 degrees, so divide by 2 if we need 90°+ 
-                if turn_needed % 2 == 1:  # Odd number means we need one 45° turn
-                    print(f"Turning right 45° (1 R command)")
-                    self.direction = Direction((self.direction.value + 1) % 8)
-                    return ["R"]
-                else:
-                    print(f"Turning right {turn_needed * 45}° ({turns} R commands)")
-                    self.direction = target_direction
-                    return ["R"] * turns
+            # Turn toward target
+            if turn_needed == 2:  # 90 degrees clockwise
+                print("Turning right 90 degrees")
+                self.direction = target_direction
+                return ["R", "R"]
+            elif turn_needed == 6:  # 90 degrees counter-clockwise (270 clockwise)
+                print("Turning left 90 degrees") 
+                self.direction = target_direction
+                return ["L", "L"]
+            elif turn_needed == 4:  # 180 degrees
+                print("Turning around 180 degrees")
+                self.direction = target_direction
+                return ["R", "R", "R", "R"]
             else:
-                # Turn counter-clockwise (left) - shorter path
-                left_turns = (8 - turn_needed)
-                turns = left_turns // 2
-                if left_turns % 2 == 1:
-                    print(f"Turning left 45° (1 L command)")
-                    self.direction = Direction((self.direction.value - 1) % 8)
-                    return ["L"]
-                else:
-                    print(f"Turning left {left_turns * 45}° ({turns} L commands)")
+                # Handle other angles
+                if turn_needed <= 4:
+                    turns = turn_needed // 2
+                    remaining = turn_needed % 2
+                    commands = ["R"] * turns
+                    if remaining:
+                        commands.append("R")
                     self.direction = target_direction
-                    return ["L"] * turns
+                    return commands
+                else:
+                    turns = (8 - turn_needed) // 2
+                    remaining = (8 - turn_needed) % 2
+                    commands = ["L"] * turns
+                    if remaining:
+                        commands.append("L")
+                    self.direction = target_direction
+                    return commands
         
         # We're facing the right direction, now move forward
         print(f"Moving forward from ({self.x},{self.y}) to ({target_x},{target_y})")
@@ -271,17 +287,11 @@ class MicromouseController:
         # Update our position expectation
         self.x, self.y = target_x, target_y
         
-        # Choose speed based on strategy
-        if self.current_strategy == "explore":
-            if self.momentum < 2:
-                return ["F2"]  # Accelerate
-            else:
-                return ["F1"]  # Maintain moderate speed
+        # Move forward with appropriate speed
+        if self.momentum < 2:
+            return ["F2"]  # Accelerate
         else:
-            if self.momentum < 3:
-                return ["F2"]  # Accelerate for speed runs
-            else:
-                return ["F1"]  # Maintain higher speed
+            return ["F1"]  # Maintain speed
 
     def update_flood_fill(self):
         """Update flood fill distances from goal"""
@@ -311,11 +321,8 @@ class MicromouseController:
                     self.distances[nx][ny] = dist + 1
                     queue.append((nx, ny, dist + 1))
         
-        start_distance = self.distances[0][15]  # Distance from actual start position
+        start_distance = self.distances[0][0]  # Distance from start position
         print(f"Flood fill complete. Start distance: {start_distance}")
-        
-        # Debug: print some distances
-        print(f"Distance to goal from current position ({self.x},{self.y}): {self.distances[self.x][self.y]}")
 
 
 # Global controller instances
@@ -346,3 +353,7 @@ def micro_mouse():
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e), "instructions": ["F0"], "end": False}), 200
+
+if __name__ == '__main__':
+    print("Micromouse Controller loaded!")
+    print("Fixed coordinate system - start at (0,0) bottom-left!")
