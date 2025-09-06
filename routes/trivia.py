@@ -13,7 +13,7 @@ def get_trivia_answers():
         4,  # Q6: Amy Winehouse (never did a James Bond theme)
         3,  # Q7: 0.5px (smallest reasonable font size)
         1,  # Q8: "graceful the pet" (anagram of "capture the flag")
-        3,   # Q9: USA, Hong Kong, Singapore
+        3,  # Q9: USA, Hong Kong, Singapore
         3, #10
         3, #11
         3, #12
@@ -22,11 +22,11 @@ def get_trivia_answers():
         2, #15
         2,
         1,
-        2,
+        2, #18
         1,
-        3, #20
+        1, #20
         2,
-        2,
+        2, #22
         2,
         5,
         2 #25
