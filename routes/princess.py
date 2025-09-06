@@ -1,116 +1,150 @@
 from flask import Flask, request, jsonify
+import heapq
+from collections import defaultdict
+from functools import lru_cache
+
 from routes import app
 
-@app.route("/princess-diaries", methods=["POST"])
-def princess_diaries():
-    data = request.get_json()
-    tasks = data["tasks"]
-    subway = data["subway"]
-    start_station = data["starting_station"]
+def floyd_warshall(graph, stations):
+    """Precompute all-pairs shortest paths using Floyd-Warshall"""
+    # Initialize distance matrix
+    dist = {}
+    for i in stations:
+        for j in stations:
+            if i == j:
+                dist[(i, j)] = 0
+            else:
+                dist[(i, j)] = float('inf')
     
+    # Set direct edge weights
+    for station in graph:
+        for neighbor, weight in graph[station]:
+            dist[(station, neighbor)] = weight
+    
+    # Floyd-Warshall algorithm
+    for k in stations:
+        for i in stations:
+            for j in stations:
+                if dist[(i, k)] + dist[(k, j)] < dist[(i, j)]:
+                    dist[(i, j)] = dist[(i, k)] + dist[(k, j)]
+    
+    return dist
+
+def build_graph(subway_routes):
+    """Build adjacency list representation of the subway system"""
+    graph = defaultdict(list)
     stations = set()
-    adjacency = {}
     
-    for route in subway:
-        u, v = route["connection"]
-        fee = route["fee"]
-        stations.update([u, v])
-        
-        if u not in adjacency:
-            adjacency[u] = {}
-        if v not in adjacency:
-            adjacency[v] = {}
-            
-        adjacency[u][v] = min(adjacency[u].get(v, float('inf')), fee)
-        adjacency[v][u] = min(adjacency[v].get(u, float('inf')), fee)
+    for route in subway_routes:
+        station1, station2 = route['connection']
+        fee = route['fee']
+        graph[station1].append((station2, fee))
+        graph[station2].append((station1, fee))
+        stations.add(station1)
+        stations.add(station2)
     
-    stations = list(stations)
-    V = len(stations)
-    station_idx = {s: i for i, s in enumerate(stations)}
+    return graph, stations
 
-    INF = float('inf')
-    dist = [[INF if i != j else 0 for j in range(V)] for i in range(V)]
+def find_optimal_schedule(tasks, subway_routes, starting_station):
+    """Find the schedule that maximizes score and minimizes transport cost"""
     
-    for station, neighbors in adjacency.items():
-        i = station_idx[station]
-        for neighbor, fee in neighbors.items():
-            j = station_idx[neighbor]
-            dist[i][j] = fee
+    if not tasks:
+        return 0, 0, []
     
-    for k in range(V):
-        for i in range(V):
-            if dist[i][k] != INF:  # Skip if no path to k
-                for j in range(V):
-                    if dist[k][j] != INF:  # Skip if no path from k
-                        dist[i][j] = min(dist[i][j], dist[i][k] + dist[k][j])
+    # Build subway graph and get all stations
+    graph, graph_stations = build_graph(subway_routes)
     
-
-    tasks.sort(key=lambda x: x["end"])
+    # Add starting station and task stations
+    all_stations = graph_stations.copy()
+    all_stations.add(starting_station)
+    for task in tasks:
+        all_stations.add(task['station'])
     
-    task_stations = [station_idx[task["station"]] for task in tasks]
-    start_idx = station_idx[start_station]
+    # Precompute all shortest distances using Floyd-Warshall
+    distances = floyd_warshall(graph, all_stations)
     
-    N = len(tasks)
-    dp = [(0, INF, [])] * N  # (score, fee, schedule)
+    # Sort tasks by end time for easier processing
+    sorted_tasks = sorted(tasks, key=lambda x: x['end'])
+    n = len(sorted_tasks)
     
-    for i in range(N):
-        task = tasks[i]
-        task_station_idx = task_stations[i]
+    # DP: dp[i] = (max_score, min_cost_for_max_score, best_schedule)
+    # for the best schedule considering tasks 0 to i
+    dp = [(0, 0, [])]  # Base case: no tasks selected
+    
+    for i in range(n):
+        current_task = sorted_tasks[i]
         
-        # Base case: just this task
-        best_score = task["score"]
-        best_fee = dist[start_idx][task_station_idx]
-        best_schedule = [task["name"]]
+        # Option 1: Don't take current task
+        prev_score, prev_cost, prev_schedule = dp[i]
+        dp.append((prev_score, prev_cost, prev_schedule))
         
-        # Try combining with previous non-overlapping tasks
-        for j in range(i):
-            if tasks[j]["end"] <= task["start"]:  # Non-overlapping
-                prev_score, prev_fee, prev_schedule = dp[j]
-                if prev_fee != INF:  # Valid previous state
-                    travel_fee = dist[task_stations[j]][task_station_idx]
-                    if travel_fee != INF:  # Valid travel path
-                        score = prev_score + task["score"]
-                        fee = prev_fee + travel_fee
-                        
-                        # Update if better score, or same score with lower fee
-                        if (score > best_score or 
-                            (score == best_score and fee < best_fee)):
-                            best_score = score
-                            best_fee = fee
-                            best_schedule = prev_schedule + [task["name"]]
-        
-        dp[i] = (best_score, best_fee, best_schedule)
-    
-    # Find the best final result
-    best_result = max(dp, key=lambda x: (x[0], -x[1]) if x[1] != INF else (-1, 0))
-    max_score, min_fee, schedule = best_result
-    
-    # Add return trip cost
-    if schedule and min_fee != INF:
-        # Find the last task's station
-        last_task_name = schedule[-1]
-        last_task_station = None
-        for task in tasks:
-            if task["name"] == last_task_name:
-                last_task_station = station_idx[task["station"]]
+        # Option 2: Take current task
+        # Find the latest non-overlapping task
+        best_prev_idx = -1
+        for j in range(i - 1, -1, -1):
+            if sorted_tasks[j]['end'] <= current_task['start']:
+                best_prev_idx = j
                 break
         
-        if last_task_station is not None:
-            return_cost = dist[last_task_station][start_idx]
-            if return_cost != INF:
-                min_fee += return_cost
+        if best_prev_idx == -1:
+            # No previous tasks, start from beginning
+            cost = distances[(starting_station, current_task['station'])] + \
+                   distances[(current_task['station'], starting_station)]
+            new_score = current_task['score']
+            new_schedule = [current_task['name']]
+        else:
+            # Extend from best previous schedule
+            prev_score, prev_cost, prev_schedule = dp[best_prev_idx + 1]
+            
+            if prev_schedule:
+                # Find the last task in previous schedule
+                last_task_name = prev_schedule[-1]
+                last_task = next(t for t in tasks if t['name'] == last_task_name)
+                last_station = last_task['station']
+                
+                # Calculate cost: remove return to start, add travel to current, add return
+                cost = prev_cost - distances[(last_station, starting_station)] + \
+                       distances[(last_station, current_task['station'])] + \
+                       distances[(current_task['station'], starting_station)]
+            else:
+                cost = distances[(starting_station, current_task['station'])] + \
+                       distances[(current_task['station'], starting_station)]
+            
+            new_score = prev_score + current_task['score']
+            new_schedule = prev_schedule + [current_task['name']]
+        
+        # Update dp[i+1] if this option is better
+        current_best_score, current_best_cost, current_best_schedule = dp[i + 1]
+        
+        if (new_score > current_best_score or 
+            (new_score == current_best_score and cost < current_best_cost)):
+            dp[i + 1] = (new_score, cost, new_schedule)
     
-    # Handle case where no valid solution exists
-    if min_fee == INF:
-        min_fee = 0
-        max_score = 0
-        schedule = []
+    max_score, min_cost, best_schedule = dp[n]
     
-    return jsonify({
-        "max_score": max_score,
-        "min_fee": min_fee,
-        "schedule": schedule
-    })
+    # Sort schedule by start time
+    if best_schedule:
+        task_start_times = {task['name']: task['start'] for task in tasks}
+        best_schedule.sort(key=lambda name: task_start_times[name])
+    
+    return max_score, min_cost, best_schedule
 
-if __name__ == "__main__":
-    app.run(port=3000, debug=True)
+@app.route('/princess-diaries', methods=['POST'])
+def princess_diaries():
+    try:
+        data = request.get_json()
+        
+        tasks = data['tasks']
+        subway_routes = data['subway']
+        starting_station = data['starting_station']
+        
+        max_score, min_fee, schedule = find_optimal_schedule(tasks, subway_routes, starting_station)
+        
+        return jsonify({
+            "max_score": max_score,
+            "min_fee": min_fee,
+            "schedule": schedule
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
