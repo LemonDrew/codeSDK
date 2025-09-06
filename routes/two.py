@@ -61,17 +61,22 @@ def add_random_tile(grid):
     return grid
 
 def check_endgame(grid):
-    for r in range(4):
-        for c in range(4):
-            if grid[r][c] is None:
-                return None
-            if r < 3 and grid[r][c] == grid[r + 1][c]:
-                return None
-            if c < 3 and grid[r][c] == grid[r][c + 1]:
-                return None
+    # 1. Check for win first
     for row in grid:
         if 2048 in row:
             return "win"
+
+    # 2. Check if moves are possible (empty or mergeable tiles)
+    for r in range(4):
+        for c in range(4):
+            if grid[r][c] is None:
+                return None  # Game can continue
+            if r < 3 and grid[r][c] == grid[r + 1][c]:
+                return None  # Merge possible
+            if c < 3 and grid[r][c] == grid[r][c + 1]:
+                return None  # Merge possible
+
+    # 3. No moves and no empty tiles -> lose
     return "lose"
 
 @app.route("/2048", methods=["POST"])
