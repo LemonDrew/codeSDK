@@ -125,11 +125,13 @@ def process_challenge_one(data):
 
     transformations = data["transformations"]
 
-    transformations = transformations.strip("[]")
+    if isinstance(transformations, str):
+        transformations = transformations.strip("[]") 
+        func_names = [name.strip() for name in transformations.split(",")]
+    else:
+        func_names = transformations
 
     new_transformations = []
-
-    func_names = [name.strip() for name in transformations.split(",")]
 
     for f in func_names:
 
