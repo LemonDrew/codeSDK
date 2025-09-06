@@ -116,6 +116,7 @@ class MicromouseController:
         relative_angles = [-2, -1, 0, 1, 2]
         sensor_names = ['L90', 'L45', 'Forward', 'R45', 'R90']
         
+        walls_added = False
         for i, has_wall in enumerate(sensor_data):
             if has_wall:
                 # Calculate absolute direction of this sensor
@@ -134,8 +135,12 @@ class MicromouseController:
                     if wall not in self.walls:
                         self.walls.add(wall)
                         print(f"Added wall {sensor_names[i]}: between ({self.x},{self.y}) and ({adjacent_x},{adjacent_y})")
+                        walls_added = True
                 else:
                     print(f"Sensor {sensor_names[i]} detected boundary wall at ({adjacent_x},{adjacent_y})")
+        
+        if not walls_added:
+            print("No new walls detected this turn")
 
     def get_direction_delta(self, direction_value: int) -> Tuple[int, int]:
         """Get x,y delta for a direction value (0-7)"""
