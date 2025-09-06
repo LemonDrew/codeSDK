@@ -1,116 +1,160 @@
 from flask import Flask, request, jsonify
+import heapq
+from collections import defaultdict
+import sys
+
 from routes import app
 
-@app.route("/princess-diaries", methods=["POST"])
-def princess_diaries():
-    data = request.get_json()
-    tasks = data["tasks"]
-    subway = data["subway"]
-    start_station = data["starting_station"]
+def dijkstra(graph, start, end):
+    """Find shortest path cost between start and end using Dijkstra's algorithm"""
+    if start == end:
+        return 0
     
-    stations = set()
-    adjacency = {}
+    distances = defaultdict(lambda: float('inf'))
+    distances[start] = 0
+    pq = [(0, start)]
+    visited = set()
     
-    for route in subway:
-        u, v = route["connection"]
-        fee = route["fee"]
-        stations.update([u, v])
+    while pq:
+        current_dist, current = heapq.heappop(pq)
         
-        if u not in adjacency:
-            adjacency[u] = {}
-        if v not in adjacency:
-            adjacency[v] = {}
+        if current in visited:
+            continue
             
-        adjacency[u][v] = min(adjacency[u].get(v, float('inf')), fee)
-        adjacency[v][u] = min(adjacency[v].get(u, float('inf')), fee)
-    
-    stations = list(stations)
-    V = len(stations)
-    station_idx = {s: i for i, s in enumerate(stations)}
-
-    INF = float('inf')
-    dist = [[INF if i != j else 0 for j in range(V)] for i in range(V)]
-    
-    for station, neighbors in adjacency.items():
-        i = station_idx[station]
-        for neighbor, fee in neighbors.items():
-            j = station_idx[neighbor]
-            dist[i][j] = fee
-    
-    for k in range(V):
-        for i in range(V):
-            if dist[i][k] != INF:  # Skip if no path to k
-                for j in range(V):
-                    if dist[k][j] != INF:  # Skip if no path from k
-                        dist[i][j] = min(dist[i][j], dist[i][k] + dist[k][j])
-    
-
-    tasks.sort(key=lambda x: x["end"])
-    
-    task_stations = [station_idx[task["station"]] for task in tasks]
-    start_idx = station_idx[start_station]
-    
-    N = len(tasks)
-    dp = [(0, INF, [])] * N  # (score, fee, schedule)
-    
-    for i in range(N):
-        task = tasks[i]
-        task_station_idx = task_stations[i]
+        visited.add(current)
         
-        # Base case: just this task
-        best_score = task["score"]
-        best_fee = dist[start_idx][task_station_idx]
-        best_schedule = [task["name"]]
+        if current == end:
+            return current_dist
+            
+        for neighbor, weight in graph[current]:
+            if neighbor not in visited:
+                new_dist = current_dist + weight
+                if new_dist < distances[neighbor]:
+                    distances[neighbor] = new_dist
+                    heapq.heappush(pq, (new_dist, neighbor))
+    
+    return float('inf')
+
+def build_graph(subway_routes):
+    """Build adjacency list representation of the subway system"""
+    graph = defaultdict(list)
+    for route in subway_routes:
+        station1, station2 = route['connection']
+        fee = route['fee']
+        graph[station1].append((station2, fee))
+        graph[station2].append((station1, fee))
+    return graph
+
+def tasks_overlap(task1, task2):
+    """Check if two tasks have overlapping time windows"""
+    return not (task1['end'] <= task2['start'] or task2['end'] <= task1['start'])
+
+def find_optimal_schedule(tasks, subway_routes, starting_station):
+    """Find the schedule that maximizes score and minimizes transport cost"""
+    
+    # Build subway graph
+    graph = build_graph(subway_routes)
+    
+    # Sort tasks by start time
+    sorted_tasks = sorted(tasks, key=lambda x: x['start'])
+    n = len(sorted_tasks)
+    
+    # Precompute all shortest distances
+    all_stations = set([starting_station])
+    for task in tasks:
+        all_stations.add(task['station'])
+    
+    distances = {}
+    for station1 in all_stations:
+        for station2 in all_stations:
+            if station1 != station2:
+                distances[(station1, station2)] = dijkstra(graph, station1, station2)
+            else:
+                distances[(station1, station2)] = 0
+    
+    # Dynamic programming to find maximum score schedules
+    # dp[i] = list of (score, min_cost, schedule) for schedules ending at task i
+    dp = [[] for _ in range(n)]
+    
+    # Base case: each task can be done alone
+    for i in range(n):
+        task = sorted_tasks[i]
+        cost = distances[(starting_station, task['station'])] + distances[(task['station'], starting_station)]
+        dp[i].append((task['score'], cost, [task['name']]))
+    
+    # Fill DP table
+    for i in range(n):
+        current_task = sorted_tasks[i]
         
-        # Try combining with previous non-overlapping tasks
+        # Try extending previous schedules
         for j in range(i):
-            if tasks[j]["end"] <= task["start"]:  # Non-overlapping
-                prev_score, prev_fee, prev_schedule = dp[j]
-                if prev_fee != INF:  # Valid previous state
-                    travel_fee = dist[task_stations[j]][task_station_idx]
-                    if travel_fee != INF:  # Valid travel path
-                        score = prev_score + task["score"]
-                        fee = prev_fee + travel_fee
-                        
-                        # Update if better score, or same score with lower fee
-                        if (score > best_score or 
-                            (score == best_score and fee < best_fee)):
-                            best_score = score
-                            best_fee = fee
-                            best_schedule = prev_schedule + [task["name"]]
-        
-        dp[i] = (best_score, best_fee, best_schedule)
+            prev_task = sorted_tasks[j]
+            
+            # Check if tasks don't overlap
+            if not tasks_overlap(current_task, prev_task):
+                # Extend each schedule ending at j
+                for prev_score, prev_cost, prev_schedule in dp[j]:
+                    # Calculate additional cost to go from prev_task to current_task
+                    additional_cost = distances[(prev_task['station'], current_task['station'])]
+                    # Cost to return to starting station from current task
+                    return_cost = distances[(current_task['station'], starting_station)]
+                    
+                    new_score = prev_score + current_task['score']
+                    # Remove the return cost from previous schedule and add new costs
+                    new_cost = prev_cost - distances[(prev_task['station'], starting_station)] + additional_cost + return_cost
+                    new_schedule = prev_schedule + [current_task['name']]
+                    
+                    dp[i].append((new_score, new_cost, new_schedule))
     
-    # Find the best final result
-    best_result = max(dp, key=lambda x: (x[0], -x[1]) if x[1] != INF else (-1, 0))
-    max_score, min_fee, schedule = best_result
+    # Find the schedule with maximum score and minimum cost
+    best_schedules = []
+    max_score = 0
     
-    # Add return trip cost
-    if schedule and min_fee != INF:
-        # Find the last task's station
-        last_task_name = schedule[-1]
-        last_task_station = None
-        for task in tasks:
-            if task["name"] == last_task_name:
-                last_task_station = station_idx[task["station"]]
-                break
-        
-        if last_task_station is not None:
-            return_cost = dist[last_task_station][start_idx]
-            if return_cost != INF:
-                min_fee += return_cost
+    # Collect all schedules from all ending positions
+    all_schedules = []
+    for schedules in dp:
+        all_schedules.extend(schedules)
     
-    # Handle case where no valid solution exists
-    if min_fee == INF:
-        min_fee = 0
-        max_score = 0
-        schedule = []
+    # Find maximum score
+    for score, cost, schedule in all_schedules:
+        if score > max_score:
+            max_score = score
     
-    return jsonify({
-        "max_score": max_score,
-        "min_fee": min_fee,
-        "schedule": schedule
-    })
+    # Find minimum cost among maximum score schedules
+    min_cost = float('inf')
+    for score, cost, schedule in all_schedules:
+        if score == max_score and cost < min_cost:
+            min_cost = cost
+            best_schedules = [schedule]
+        elif score == max_score and cost == min_cost:
+            best_schedules.append(schedule)
+    
+    if not best_schedules:
+        return 0, 0, []
+    
+    # Return the first optimal schedule (they're all equivalent)
+    return max_score, min_cost, best_schedules[0]
 
-if __name__ == "__main__":
-    app.run(port=3000, debug=True)
+@app.route('/princess-diaries', methods=['POST'])
+def princess_diaries():
+    try:
+        data = request.get_json()
+        
+        tasks = data['tasks']
+        subway_routes = data['subway']
+        starting_station = data['starting_station']
+        
+        max_score, min_fee, schedule = find_optimal_schedule(tasks, subway_routes, starting_station)
+        
+        # Sort schedule by start time (should already be sorted from our algorithm)
+        task_start_times = {task['name']: task['start'] for task in tasks}
+        schedule.sort(key=lambda name: task_start_times[name])
+        
+        return jsonify({
+            "max_score": max_score,
+            "min_fee": min_fee,
+            "schedule": schedule
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
