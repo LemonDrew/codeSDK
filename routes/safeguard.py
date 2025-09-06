@@ -1,9 +1,11 @@
 import re
 from flask import Flask, request, jsonify
 from routes import app
+import logging
+
+logger = logging.getLogger(__name__)
 
 def process_challenge_one(data):
-
     transform_map = {
         "encode_mirror_alphabet": encode_mirror_alphabet,
         "double_consonants": double_consonants,
@@ -13,15 +15,23 @@ def process_challenge_one(data):
     }
 
     transformations = data["transformations"]
-    encrypted_data = data["transformed_encrypted_word"]
 
-    func_names = re.findall(r'(\w+)\(x\)', transformations)
+    # If it's already a list, just use it; else extract from string
+    if isinstance(transformations, str):
+        func_names = re.findall(r'(\w+)\(x\)', transformations)
+    elif isinstance(transformations, list):
+        func_names = transformations
+    else:
+        raise TypeError("transformations must be a string or list")
+
+    encrypted_data = data["transformed_encrypted_word"]
 
     for function_name in func_names:
         func = transform_map[function_name]
         encrypted_data = func(encrypted_data)
 
     return encrypted_data
+
 
 def mirror_words(x):
 
