@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 import itertools
-
-app = Flask(__name__)
+from routes import app
 
 @app.route("/princess-diaries", methods=["POST"])
 def princess_diaries():
