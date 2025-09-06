@@ -1,27 +1,37 @@
 from flask import Flask, request, jsonify
+from collections import defaultdict
 
 from routes import app
 
-# Utility: Union-Find (Disjoint Set Union)
-class DSU:
-    def __init__(self):
-        self.parent = {}
+def find_cycle_edges(connections):
+    graph = defaultdict(list)
+    for c in connections:
+        graph[c["spy1"]].append(c["spy2"])
+        graph[c["spy2"]].append(c["spy1"])
 
-    def find(self, x):
-        if x not in self.parent:
-            self.parent[x] = x
-        if self.parent[x] != x:
-            self.parent[x] = self.find(self.parent[x])
-        return self.parent[x]
+    visited = set()
+    parent = {}
+    cycle_edges = []
 
-    def union(self, x, y):
-        rootX = self.find(x)
-        rootY = self.find(y)
-        if rootX == rootY:
-            return False  
-        self.parent[rootY] = rootX
-        return True
+    def dfs(u, p):
+        visited.add(u)
+        for v in graph[u]:
+            if v == p:
+                continue
+            if v in visited:
+                # Found a back edge (u, v)
+                if (v, u) not in cycle_edges:  # avoid duplicates
+                    cycle_edges.append((u, v))
+            else:
+                parent[v] = u
+                dfs(v, u)
 
+    for node in graph:
+        if node not in visited:
+            dfs(node, None)
+
+    # Convert to list of dicts
+    return [{"spy1": u, "spy2": v} for u, v in cycle_edges]
 
 @app.route("/investigate", methods=["POST"])
 def investigate():
@@ -32,16 +42,8 @@ def investigate():
     for net in networks:
         network_id = net.get("networkId")
         connections = net.get("network", [])
-        
-        dsu = DSU()
-        extra_channels = []
 
-        for connection in connections:
-            spy1 = connection["spy1"]
-            spy2 = connection["spy2"]
-            if not dsu.union(spy1, spy2):
-                # edge creates a cycle
-                extra_channels.append({"spy1": spy1, "spy2": spy2})
+        extra_channels = find_cycle_edges(connections)
 
         results.append({
             "networkId": network_id,
@@ -49,7 +51,6 @@ def investigate():
         })
 
     return jsonify({"networks": results})
-
 
 if __name__ == "__main__":
     app.run(port=3000, debug=True)
