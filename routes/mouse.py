@@ -1,364 +1,282 @@
-from flask import request, jsonify
-import json
 import math
-from typing import List, Tuple, Dict, Optional, Set
-from collections import deque
-from enum import Enum
+from flask import Flask, request, jsonify
 from routes import app
 
-class Direction(Enum):
-    NORTH = 0
-    NORTHEAST = 1
-    EAST = 2
-    SOUTHEAST = 3
-    SOUTH = 4
-    SOUTHWEST = 5
-    WEST = 6
-    NORTHWEST = 7
-
-class MicromouseController:
+# ---------------------------------------------------------------------------- #
+#                                  Mouse Class                                 #
+# ---------------------------------------------------------------------------- #
+class Mouse:
+    """Represents the state of the micromouse."""
     def __init__(self):
-        # Maze representation (16x16 grid)
-        self.walls = set()  # Store wall information as (x1,y1,x2,y2) tuples
-        self.visited = set()
-        self.goal_cells = {(7,7), (7,8), (8,7), (8,8)}
-        
-        # Mouse state - starts at bottom-left (0,0), facing North
-        self.x, self.y = 0, 0  # Actually start at bottom-left!
-        self.direction = Direction.NORTH  # Facing North (toward positive Y)
+        # Start at the center of the bottom-left cell (0,0).
+        # In a half-cell grid (1 unit = 8cm), this is (1,1).
+        self.x = 1
+        self.y = 1
+        self.orientation = 0  # 0:N, 45:NE, 90:E, ..., 315:NW
         self.momentum = 0
-        
-        # Strategy state
-        self.current_strategy = "explore"
-        self.runs_completed = 0
-        self.last_run = -1
-        self.move_count = 0
-        self.stuck_counter = 0
-        
-        # Add boundary walls
-        self.add_boundary_walls()
-        
-        # Flood fill distances
-        self.distances = [[float('inf') for _ in range(16)] for _ in range(16)]
-        self.update_flood_fill()
-        
-        print(f"Controller initialized. Start: ({self.x},{self.y}), Goal cells: {self.goal_cells}")
 
-    def add_boundary_walls(self):
-        """Add walls around the maze boundary"""
-        for i in range(16):
-            # Boundary walls - these prevent moving outside the maze
-            self.walls.add((i, 15, i, 16))   # Top boundary (y=16)
-            self.walls.add((i, -1, i, 0))    # Bottom boundary (y=-1)
-            self.walls.add((-1, i, 0, i))    # Left boundary (x=-1)
-            self.walls.add((15, i, 16, i))   # Right boundary (x=16)
+# ---------------------------------------------------------------------------- #
+#                                   Maze Class                                 #
+# ---------------------------------------------------------------------------- #
+class Maze:
+    """Represents the maze environment and rules."""
+    def __init__(self, width=16, height=16):
+        # Maze dimensions in full cells
+        self.width = width
+        self.height = height
 
-    def process_request(self, data: dict) -> dict:
-        """Main controller logic"""
-        
-        # Extract request data
-        sensor_data = data.get('sensor_data', [0, 0, 0, 0, 0])
-        total_time_ms = data.get('total_time_ms', 0)
-        goal_reached = data.get('goal_reached', False)
-        best_time_ms = data.get('best_time_ms')
-        run_time_ms = data.get('run_time_ms', 0)
-        run = data.get('run', 0)
-        momentum = data.get('momentum', 0)
-        
-        # Update momentum
-        self.momentum = momentum
-        
-        print(f"\n=== REQUEST {self.move_count} ===")
-        print(f"Position: ({self.x},{self.y}), Momentum: {momentum}, Direction: {self.direction.name}")
-        print(f"Goal reached: {goal_reached}, Run: {run}")
-        print(f"Sensors: {sensor_data} (L90, L45, Forward, R45, R90)")
-        self.move_count += 1
-        
-        # Handle run changes (reset to start)
-        if run > self.last_run:
-            print(f"New run detected: {run}")
-            self.last_run = run
-            if run > 0:
-                self.runs_completed += 1
-            # Reset to start position
-            self.x, self.y = 0, 0
-            self.direction = Direction.NORTH
-            self.stuck_counter = 0
-            print(f"Reset to start position (0,0)")
-        
-        # Update walls based on sensor data
-        self.update_walls_from_sensors(sensor_data)
-        self.visited.add((self.x, self.y))
-        
-        # Check if we should end
-        if total_time_ms > 290000 or self.stuck_counter > 20:
-            print("Time limit or stuck too long, ending")
-            return {"instructions": [], "end": True}
-        
-        # Handle goal reached
-        if goal_reached:
-            print("Goal reached! Updating flood fill")
-            self.update_flood_fill()
-            self.stuck_counter = 0
-            return {"instructions": [], "end": False}
-        
-        # Generate movement instructions
-        instructions = self.get_movement_instructions()
-        print(f"Generated instructions: {instructions}")
-        
-        return {"instructions": instructions, "end": False}
+    def is_valid_position(self, x, y):
+        """Checks if a position is within the maze boundaries (in half-cells)."""
+        # The grid spans from 0 to width*2 and 0 to height*2
+        return 0 <= x <= self.width * 2 and 0 <= y <= self.height * 2
 
-    def update_walls_from_sensors(self, sensor_data: List[int]):
-        """Update wall map based on sensor data - ONLY add walls where sensors detect them"""
-        
-        # Sensor directions relative to current facing direction
-        # [-90°, -45°, 0°, +45°, +90°]
-        relative_angles = [-2, -1, 0, 1, 2]
-        sensor_names = ['L90', 'L45', 'Forward', 'R45', 'R90']
-        
-        walls_added = False
-        for i, has_wall in enumerate(sensor_data):
-            if has_wall:
-                # Calculate absolute direction of this sensor
-                sensor_direction = (self.direction.value + relative_angles[i]) % 8
-                
-                # Get the cell this sensor is looking toward
-                dx, dy = self.get_direction_delta(sensor_direction)
-                adjacent_x = self.x + dx
-                adjacent_y = self.y + dy
-                
-                # Only add walls for cells that are within the maze bounds
-                if 0 <= adjacent_x < 16 and 0 <= adjacent_y < 16:
-                    # There's a wall between current cell and the adjacent cell
-                    wall = (min(self.x, adjacent_x), min(self.y, adjacent_y), 
-                           max(self.x, adjacent_x), max(self.y, adjacent_y))
-                    if wall not in self.walls:
-                        self.walls.add(wall)
-                        print(f"Added wall {sensor_names[i]}: between ({self.x},{self.y}) and ({adjacent_x},{adjacent_y})")
-                        walls_added = True
-                else:
-                    print(f"Sensor {sensor_names[i]} detected boundary wall at ({adjacent_x},{adjacent_y})")
-        
-        if not walls_added:
-            print("No new walls detected this turn")
+    def is_in_goal_interior(self, x, y):
+        """
+        Checks if the mouse is entirely within the goal's interior.
+        Goal is the central 2x2 block (cells (7,7), (7,8), (8,7), (8,8)).
+        In half-cell coordinates, the interior is the central 2x2 half-cell square.
+        This corresponds to x values of 15, 16 and y values of 15, 16.
+        A stop must be at a cell center (odd, odd), so (15,15) is the key goal center.
+        """
+        return (14 < x < 18) and (14 < y < 18)
 
-    def get_direction_delta(self, direction_value: int) -> Tuple[int, int]:
-        """Get x,y delta for a direction value (0-7)"""
-        deltas = [
-            (0, 1),   # 0: North (+Y)
-            (1, 1),   # 1: Northeast  
-            (1, 0),   # 2: East (+X)
-            (1, -1),  # 3: Southeast
-            (0, -1),  # 4: South (-Y)
-            (-1, -1), # 5: Southwest
-            (-1, 0),  # 6: West (-X)
-            (-1, 1),  # 7: Northwest
-        ]
-        return deltas[direction_value % 8]
+# ---------------------------------------------------------------------------- #
+#                                Movement Class                                #
+# ---------------------------------------------------------------------------- #
+class Movement:
+    """
+    Acts as the physics engine for the mouse. It parses instructions,
+    calculates time, updates state, and checks for crashes.
+    """
+    def __init__(self, mouse, maze):
+        self.mouse = mouse
+        self.maze = maze
+        self.BASE_TIMES = {
+            "inplace_turn": 200,
+            "default_rest": 200,
+            "half_step_cardinal": 500,
+            "half_step_intercardinal": 600,
+            "corner_tight": 700,
+            "corner_wide": 1400,
+        }
+        self.REDUCTION_MAP = {
+            0.0: 0.00, 0.5: 0.10, 1.0: 0.20, 1.5: 0.275, 2.0: 0.35,
+            2.5: 0.40, 3.0: 0.45, 3.5: 0.475, 4.0: 0.50
+        }
+        # Delta (dx, dy) for each 45-degree orientation for a half-step move
+        self.ORIENTATION_DELTAS = {
+            0:   (0, 1), 45:  (1, 1), 90:  (1, 0), 135: (1, -1),
+            180: (0, -1), 225: (-1, -1), 270: (-1, 0), 315: (-1, 1)
+        }
 
-    def has_wall(self, x1: int, y1: int, x2: int, y2: int) -> bool:
-        """Check if there's a wall between two cells"""
-        wall = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
-        return wall in self.walls
+    def _calculate_time(self, base_time, m_in, m_out):
+        """Calculates the time for a move based on momentum reduction."""
+        m_eff = (abs(m_in) + abs(m_out)) / 2.0
+        # Interpolate if m_eff is not in the map (though the rules imply it will be)
+        reduction = self.REDUCTION_MAP.get(m_eff, 0.0)
+        return round(base_time * (1 - reduction))
 
-    def is_valid_move(self, from_x: int, from_y: int, to_x: int, to_y: int) -> bool:
-        """Check if move is valid (within bounds and no wall)"""
-        # Check bounds
-        if not (0 <= to_x < 16 and 0 <= to_y < 16):
-            return False
-        
-        # Check for wall
-        if self.has_wall(from_x, from_y, to_x, to_y):
-            return False
-        
-        return True
+    def execute_instruction(self, instruction):
+        """
+        Executes a single instruction.
+        Returns: (time_ms, crashed, crash_reason)
+        """
+        m_in = self.mouse.momentum
 
-    def get_movement_instructions(self) -> List[str]:
-        """Generate movement instructions based on current strategy"""
-        
-        # Update flood fill first
-        self.update_flood_fill()
-        
-        current_dist = self.distances[self.x][self.y]
-        print(f"Current distance to goal: {current_dist}")
-        
-        # Find all possible moves
-        possible_moves = []
-        cardinal_directions = [
-            (0, 1, "North"), 
-            (1, 0, "East"), 
-            (0, -1, "South"), 
-            (-1, 0, "West")
-        ]
-        
-        for dx, dy, name in cardinal_directions:
-            target_x, target_y = self.x + dx, self.y + dy
-            
-            if self.is_valid_move(self.x, self.y, target_x, target_y):
-                distance = self.distances[target_x][target_y]
-                is_unexplored = (target_x, target_y) not in self.visited
-                possible_moves.append((target_x, target_y, distance, is_unexplored, name))
-                print(f"Can move {name} to ({target_x},{target_y}): distance={distance}, unexplored={is_unexplored}")
-        
-        if not possible_moves:
-            print("No valid moves available!")
-            self.stuck_counter += 1
-            
-            # Try to turn to see new areas
-            if self.momentum == 0:
-                return ["R"]  # Turn right to explore
-            else:
-                return ["F0"]  # Stop first
-        
-        # Reset stuck counter since we found moves
-        self.stuck_counter = 0
-        
-        # Prioritize unexplored cells, then shortest distance to goal
-        possible_moves.sort(key=lambda x: (not x[3], x[2]))
-        
-        target_x, target_y, target_dist, is_unexplored, direction_name = possible_moves[0]
-        print(f"Selected: Move {direction_name} to ({target_x},{target_y}) - distance={target_dist}, unexplored={is_unexplored}")
-        
-        return self.move_toward_cell(target_x, target_y)
+        # --- 1. Check for Corner Turns ---
+        is_corner_turn = ('T' in instruction or 'W' in instruction)
+        if is_corner_turn:
+            return self._execute_corner_turn(instruction, m_in)
 
-    def move_toward_cell(self, target_x: int, target_y: int) -> List[str]:
-        """Generate instructions to move toward target cell"""
-        
-        dx = target_x - self.x
-        dy = target_y - self.y
-        
-        # Determine required direction
-        target_direction = None
-        if dx == 0 and dy == 1:
-            target_direction = Direction.NORTH
-        elif dx == 1 and dy == 0:
-            target_direction = Direction.EAST
-        elif dx == 0 and dy == -1:
-            target_direction = Direction.SOUTH
-        elif dx == -1 and dy == 0:
-            target_direction = Direction.WEST
-        else:
-            print(f"Invalid move delta: ({dx}, {dy})")
-            return ["F0"] if self.momentum != 0 else ["R"]
-        
-        # Calculate turn needed (in 45-degree increments)
-        current_dir = self.direction.value
-        target_dir = target_direction.value
-        turn_needed = (target_dir - current_dir) % 8
-        
-        print(f"Current: {self.direction.name}({current_dir}), Target: {target_direction.name}({target_dir}), Turn: {turn_needed}")
-        
-        # If we need to turn, do it first (must be at momentum 0)
-        if turn_needed != 0:
-            if self.momentum != 0:
-                print("Must stop before turning")
-                return ["F0"]
-            
-            # Turn toward target
-            if turn_needed == 2:  # 90 degrees clockwise
-                print("Turning right 90 degrees")
-                self.direction = target_direction
-                return ["R", "R"]
-            elif turn_needed == 6:  # 90 degrees counter-clockwise (270 clockwise)
-                print("Turning left 90 degrees") 
-                self.direction = target_direction
-                return ["L", "L"]
-            elif turn_needed == 4:  # 180 degrees
-                print("Turning around 180 degrees")
-                self.direction = target_direction
-                return ["R", "R", "R", "R"]
-            else:
-                # Handle other angles
-                if turn_needed <= 4:
-                    turns = turn_needed // 2
-                    remaining = turn_needed % 2
-                    commands = ["R"] * turns
-                    if remaining:
-                        commands.append("R")
-                    self.direction = target_direction
-                    return commands
-                else:
-                    turns = (8 - turn_needed) // 2
-                    remaining = (8 - turn_needed) % 2
-                    commands = ["L"] * turns
-                    if remaining:
-                        commands.append("L")
-                    self.direction = target_direction
-                    return commands
-        
-        # We're facing the right direction, now move forward
-        print(f"Moving forward from ({self.x},{self.y}) to ({target_x},{target_y})")
-        
-        # Update our position expectation
-        self.x, self.y = target_x, target_y
-        
-        # Move forward with appropriate speed
-        if self.momentum < 2:
-            return ["F2"]  # Accelerate
-        else:
-            return ["F1"]  # Maintain speed
+        # --- 2. Parse Longitudinal and Moving Rotations ---
+        move_part = instruction
+        rotation_part = None
+        if len(instruction) > 1 and instruction[-1] in ['L', 'R']:
+             if instruction[:-1] in ["F0", "F1", "F2", "V0", "V1", "V2", "BB"]:
+                 move_part = instruction[:-1]
+                 rotation_part = instruction[-1]
 
-    def update_flood_fill(self):
-        """Update flood fill distances from goal"""
-        # Reset all distances
-        for i in range(16):
-            for j in range(16):
-                self.distances[i][j] = float('inf')
-        
-        # Initialize goal cells with distance 0
-        queue = deque()
-        for gx, gy in self.goal_cells:
-            self.distances[gx][gy] = 0
-            queue.append((gx, gy, 0))
-        
-        # Flood fill algorithm
-        while queue:
-            x, y, dist = queue.popleft()
-            
-            # Check all 4 cardinal neighbors
-            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
-                nx, ny = x + dx, y + dy
-                
-                if (0 <= nx < 16 and 0 <= ny < 16 and 
-                    not self.has_wall(x, y, nx, ny) and 
-                    self.distances[nx][ny] > dist + 1):
-                    
-                    self.distances[nx][ny] = dist + 1
-                    queue.append((nx, ny, dist + 1))
-        
-        start_distance = self.distances[0][0]  # Distance from start position
-        print(f"Flood fill complete. Start distance: {start_distance}")
+        # --- 3. In-place Rotations ---
+        if move_part in ['L', 'R'] and not rotation_part:
+            if m_in != 0:
+                return 0, True, "In-place rotation requires momentum 0"
+            self.mouse.orientation = (self.mouse.orientation - 45 if move_part == 'L' else self.mouse.orientation + 45) % 360
+            return self.BASE_TIMES["inplace_turn"], False, None
 
+        # --- 4. Longitudinal Moves ---
+        # Determine momentum change
+        m_out = m_in
+        if move_part.startswith('F'):
+            if m_in < 0: return 0, True, "Cannot use F move with reverse momentum"
+            if move_part == 'F2': m_out = min(4, m_in + 1)
+            elif move_part == 'F0': m_out = max(0, m_in - 1)
+        elif move_part.startswith('V'):
+            if m_in > 0: return 0, True, "Cannot use V move with forward momentum"
+            if move_part == 'V2': m_out = max(-4, m_in - 1)
+            elif move_part == 'V0': m_out = min(0, m_in + 1)
+        elif move_part == 'BB':
+            if m_in > 0: m_out = max(0, m_in - 2)
+            elif m_in < 0: m_out = min(0, m_in + 2)
+            else: return self.BASE_TIMES["default_rest"], False, None # BB at rest
 
-# Global controller instances
-controllers = {}
+        # Crash if reversing direction without stopping
+        if (m_in > 0 and m_out < 0) or (m_in < 0 and m_out > 0):
+            return 0, True, "Cannot accelerate in opposite direction without stopping"
+
+        # Calculate time and update position
+        is_intercardinal = self.mouse.orientation % 90 != 0
+        base_time = self.BASE_TIMES["half_step_intercardinal"] if is_intercardinal else self.BASE_TIMES["half_step_cardinal"]
+        time_ms = self._calculate_time(base_time, m_in, m_out)
+
+        dx, dy = self.ORIENTATION_DELTAS.get(self.mouse.orientation, (0,0))
+        self.mouse.x += dx
+        self.mouse.y += dy
+        self.mouse.momentum = m_out
+
+        if not self.maze.is_valid_position(self.mouse.x, self.mouse.y):
+            return time_ms, True, "Moved out of maze boundaries"
+
+        # Handle rotation part of a moving rotation
+        if rotation_part:
+            m_eff = (abs(m_in) + abs(m_out)) / 2.0
+            if m_eff > 1:
+                return time_ms, True, f"Moving rotation m_eff ({m_eff}) exceeds 1"
+            self.mouse.orientation = (self.mouse.orientation - 45 if rotation_part == 'L' else self.mouse.orientation + 45) % 360
+
+        return time_ms, False, None
+
+    def _execute_corner_turn(self, instruction, m_in):
+        """Handles the specific logic for corner turns."""
+        # Constraint: Must start facing a cardinal direction
+        if self.mouse.orientation % 90 != 0:
+            return 0, True, "Corner turns must start from a cardinal direction"
+
+        # Parse token
+        move_token = instruction[0:2]
+        turn_dir = instruction[2] # L or R
+        radius = instruction[3] # T or W
+        end_rot = instruction[4] if len(instruction) > 4 else None
+
+        # Determine momentum change
+        m_out = m_in
+        if move_token.startswith('F'):
+            if m_in < 0: return 0, True, "Cannot use F move with reverse momentum"
+            if move_token == 'F2': m_out = min(4, m_in + 1)
+            elif move_token == 'F0': m_out = max(0, m_in - 1)
+        # Add V-move logic if corner turns with V are allowed by rules
+        # (Original rules only listed F, but we'll assume they are analogous)
+
+        m_eff = (abs(m_in) + abs(m_out)) / 2.0
+
+        # Constraint: Check effective momentum
+        if radius == 'T' and m_eff > 1:
+            return 0, True, f"Tight corner turn m_eff ({m_eff}) exceeds 1"
+        if radius == 'W' and m_eff > 2:
+            return 0, True, f"Wide corner turn m_eff ({m_eff}) exceeds 2"
+
+        # Calculate time
+        base_time = self.BASE_TIMES["corner_tight"] if radius == 'T' else self.BASE_TIMES["corner_wide"]
+        time_ms = self._calculate_time(base_time, m_in, m_out)
+
+        # Update position and orientation
+        self.mouse.momentum = m_out
+        
+        # A 90-degree turn moves a certain number of half-steps fwd and side
+        # Tight turn = 1 fwd, 1 side. Wide turn = 2 fwd, 2 side.
+        steps = 1 if radius == 'T' else 2
+        
+        # Get forward and sideways vectors
+        fwd_dx, fwd_dy = self.ORIENTATION_DELTAS[self.mouse.orientation]
+        side_orientation = (self.mouse.orientation - 90 if turn_dir == 'L' else self.mouse.orientation + 90) % 360
+        side_dx, side_dy = self.ORIENTATION_DELTAS[side_orientation]
+        
+        self.mouse.x += (fwd_dx + side_dx) * steps
+        self.mouse.y += (fwd_dy + side_dy) * steps
+        
+        # Update orientation
+        self.mouse.orientation = (self.mouse.orientation - 90 if turn_dir == 'L' else self.mouse.orientation + 90) % 360
+        if end_rot:
+             self.mouse.orientation = (self.mouse.orientation - 45 if end_rot == 'L' else self.mouse.orientation + 45) % 360
+        
+        return time_ms, False, None
+
+# ---------------------------------------------------------------------------- #
+#                                Flask Application                             #
+# ---------------------------------------------------------------------------- #
+app = Flask(__name__)
+games = {} # In-memory store for game states
 
 @app.route('/micro-mouse', methods=['POST'])
 def micro_mouse():
-    """Main API endpoint"""
-    try:
-        data = request.get_json()
+    data = request.json
+    game_uuid = data.get("game_uuid")
+
+    if not game_uuid:
+        return jsonify({"error": "game_uuid is required"}), 400
+
+    if game_uuid not in games:
+        games[game_uuid] = {"mouse": Mouse(), "maze": Maze()}
+
+    state = games[game_uuid]
+    mouse = state["mouse"]
+    maze = state["maze"]
+    movement = Movement(mouse, maze)
+
+    # Use state from the request to update our simulation
+    # In a real scenario, you'd sync your server state with the incoming data
+    # For this example, we manage state internally after initialization
+    total_time_ms = data.get("total_time_ms", 0)
+    best_time_ms = data.get("best_time_ms")
+    run_time_ms = data.get("run_time_ms", 0)
+    run = data.get("run", 0)
+
+    # Check for end flag
+    if data.get("end"):
+        return jsonify({"message": f"Challenge ended by user. Final score based on best_time: {best_time_ms}"})
+
+    # Add thinking time for a valid, non-empty request
+    instructions = data.get("instructions", [])
+    if instructions:
+        total_time_ms += 50
+        is_at_start_center = (mouse.x == 1 and mouse.y == 1)
+        if not is_at_start_center:
+            run_time_ms += 50
+
+    # Execute instructions
+    for instruction in instructions:
+        time_taken, crashed, reason = movement.execute_instruction(instruction)
         
-        if not data:
-            return jsonify({"error": "No JSON data provided"}), 400
+        is_at_start_center = (mouse.x == 1 and mouse.y == 1)
+
+        # Update timers
+        total_time_ms += time_taken
+        if not is_at_start_center or mouse.momentum != 0:
+             run_time_ms += time_taken
         
-        game_uuid = data.get('game_uuid', 'default')
-        
-        # Get or create controller
-        if game_uuid not in controllers:
-            controllers[game_uuid] = MicromouseController()
-        
-        controller = controllers[game_uuid]
-        response = controller.process_request(data)
-        
-        return jsonify(response)
-    
-    except Exception as e:
-        print(f"Error in micro_mouse: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e), "instructions": ["F0"], "end": False}), 200
+        if crashed:
+            del games[game_uuid] # Clean up crashed game
+            return jsonify({"error": "Mouse crashed!", "reason": reason, "instruction": instruction}), 400
+
+    # Check for game events after moves
+    if maze.is_in_goal_interior(mouse.x, mouse.y) and mouse.momentum == 0:
+        if best_time_ms is None or run_time_ms < best_time_ms:
+            best_time_ms = run_time_ms
+
+    if mouse.x == 1 and mouse.y == 1 and mouse.momentum == 0:
+        run += 1
+        run_time_ms = 0
+
+    # ------------------------------------------------------------------------ #
+    # TODO: INSERT YOUR MAZE-SOLVING ALGORITHM HERE
+    # Based on sensor_data and current mouse state, decide the next moves.
+    # The response below is a placeholder.
+    # ------------------------------------------------------------------------ #
+    response_instructions = ["F2", "F2", "F1", "F1RT"]
+
+    return jsonify({
+        "instructions": response_instructions,
+        "end": False
+    })
 
 if __name__ == '__main__':
-    print("Micromouse Controller loaded!")
-    print("Fixed coordinate system - start at (0,0) bottom-left!")
+    app.run(debug=True, port=5001)
