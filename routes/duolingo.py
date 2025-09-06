@@ -114,7 +114,7 @@ class NumberParser:
                 ones_val = self.german_ones.get(ones_part, 0)
                 tens_val = self.german_tens.get(tens_part, 0)
                 
-                if ones_val and tens_val:
+                if ones_val > 0 and tens_val > 0:  # Fixed: Check > 0 instead of truthiness
                     return tens_val + ones_val
         
         # Handle simple cases
@@ -127,26 +127,31 @@ class NumberParser:
         total = 0
         remaining = text
         
-        # Check for scales
-        for scale_word, scale_val in self.german_scales.items():
+        # Check for scales in descending order to handle larger values first
+        for scale_word, scale_val in sorted(self.german_scales.items(), key=lambda x: x[1], reverse=True):
             if scale_word in remaining:
-                prefix = remaining.split(scale_word)[0]
-                suffix = remaining.split(scale_word)[1] if scale_word in remaining else ""
+                parts = remaining.split(scale_word, 1)  # Split only once
+                prefix = parts[0]
+                suffix = parts[1] if len(parts) > 1 else ""
                 
                 multiplier = 1
                 if prefix:
-                    multiplier = self.german_ones.get(prefix, 1)
+                    multiplier = self.german_ones.get(prefix, 0)
+                    if multiplier == 0:  # If prefix not found, try parsing it recursively
+                        multiplier = self.german_to_int(prefix) if prefix != text else 1
                 
                 total += multiplier * scale_val
                 remaining = suffix
+                break  # Process one scale at a time
         
         # Handle remaining part
-        if remaining in self.german_ones:
-            total += self.german_ones[remaining]
-        elif remaining in self.german_tens:
-            total += self.german_tens[remaining]
+        if remaining and remaining != text:  # Avoid infinite recursion
+            if remaining in self.german_ones:
+                total += self.german_ones[remaining]
+            elif remaining in self.german_tens:
+                total += self.german_tens[remaining]
         
-        return total
+        return total if total > 0 else self.german_ones.get(text, 0)
     
     def chinese_to_int(self, text):
         """Convert Chinese numerals (traditional or simplified) to integer"""
@@ -158,6 +163,7 @@ class NumberParser:
         
         total = 0
         current = 0
+        temp = 0  # For handling digits before multipliers
         
         i = 0
         while i < len(text):
@@ -166,28 +172,41 @@ class NumberParser:
             if char in self.chinese_digits:
                 value = self.chinese_digits[char]
                 
-                if value < 10:  # Digit
-                    current = current * 10 + value if current > 0 else value
+                if value < 10:  # Digit (0-9)
+                    temp = value
                 elif value == 10:  # 十
-                    if current == 0:
-                        current = 1
-                    current *= 10
+                    if temp == 0:
+                        temp = 1
+                    current += temp * 10
+                    temp = 0
                 elif value == 100:  # 百
-                    if current == 0:
-                        current = 1
-                    current *= 100
+                    if temp == 0:
+                        temp = 1
+                    current += temp * 100
+                    temp = 0
                 elif value == 1000:  # 千
-                    if current == 0:
-                        current = 1
-                    current *= 1000
+                    if temp == 0:
+                        temp = 1
+                    current += temp * 1000
+                    temp = 0
                 elif value == 10000:  # 萬/万
+                    if current == 0 and temp > 0:
+                        current = temp
+                        temp = 0
                     total += current * 10000
                     current = 0
                 elif value == 100000000:  # 億/亿
+                    if current == 0 and temp > 0:
+                        current = temp
+                        temp = 0
                     total += current * 100000000
                     current = 0
             
             i += 1
+        
+        # Add any remaining values
+        if temp > 0:
+            current += temp
         
         return total + current
     
@@ -215,34 +234,51 @@ class NumberParser:
         """Check if text is English number word"""
         words = text.lower().split()
         english_words = set(self.english_ones.keys()) | set(self.english_tens.keys()) | set(self.english_scales.keys())
-        return all(word in english_words for word in words)
+        return len(words) > 0 and all(word in english_words for word in words)
     
     def is_traditional_chinese(self, text):
         """Check if text contains traditional Chinese characters"""
         traditional_chars = {'萬', '億'}
-        return any(char in traditional_chars for char in text)
+        simplified_chars = {'万', '亿'}
+        
+        # Must contain traditional chars AND not contain simplified equivalents
+        has_traditional = any(char in traditional_chars for char in text)
+        has_simplified = any(char in simplified_chars for char in text)
+        
+        return has_traditional and not has_simplified
     
     def is_simplified_chinese(self, text):
         """Check if text contains simplified Chinese characters"""
         simplified_chars = {'万', '亿'}
         chinese_chars = set(self.chinese_digits.keys())
-        return (any(char in simplified_chars for char in text) or 
-                all(char in chinese_chars for char in text))
+        
+        # Contains simplified chars OR is all Chinese chars but not traditional
+        has_simplified = any(char in simplified_chars for char in text)
+        is_chinese = all(char in chinese_chars for char in text) and len(text) > 0
+        is_traditional = self.is_traditional_chinese(text)
+        
+        return has_simplified or (is_chinese and not is_traditional)
     
     def is_german(self, text):
         """Check if text is German number word"""
-        words = text.lower().split('und')
+        text_lower = text.lower()
+        
+        # Split by 'und' to handle compound numbers
+        parts = text_lower.split('und')
         german_words = set(self.german_ones.keys()) | set(self.german_tens.keys()) | set(self.german_scales.keys())
         
-        # Check compound words
-        if len(words) == 1:
-            word = words[0]
-            # Check if it's a compound word containing German number parts
+        # Check if any part contains German words
+        for part in parts:
+            # Check direct matches first
+            if part in german_words:
+                return True
+            
+            # Check compound words containing German number parts
             for german_word in german_words:
-                if german_word in word:
+                if len(german_word) > 2 and german_word in part:  # Avoid short false positives
                     return True
         
-        return any(word in german_words for word in words)
+        return False
     
     def parse_number(self, text):
         """Parse any supported number format to integer"""
@@ -262,15 +298,16 @@ class NumberParser:
         if self.is_english(text):
             return self.english_to_int(text)
         
+        # Try Chinese (check traditional first, then simplified)
+        if any(char in self.chinese_digits for char in text):
+            return self.chinese_to_int(text)
+        
         # Try German
         if self.is_german(text):
             return self.german_to_int(text)
         
-        # Try Chinese (both traditional and simplified)
-        if any(char in self.chinese_digits for char in text):
-            return self.chinese_to_int(text)
-        
         # If all else fails, return 0
+        logger.warning(f"Could not parse number: {text}")
         return 0
 
 @app.route('/duolingo-sort', methods=['POST'])
@@ -279,10 +316,13 @@ def duolingo_sort():
         data = request.get_json()
         
         if not data or 'part' not in data or 'challengeInput' not in data:
+            logger.error("Invalid input format")
             return jsonify({'error': 'Invalid input format'}), 400
         
         part = data['part']
         unsorted_list = data['challengeInput']['unsortedList']
+        
+        logger.info(f"Processing part {part} with {len(unsorted_list)} items")
         
         parser = NumberParser()
         
@@ -292,6 +332,7 @@ def duolingo_sort():
             for item in unsorted_list:
                 value = parser.parse_number(item)
                 number_pairs.append(value)
+                logger.debug(f"Parsed '{item}' -> {value}")
             
             # Sort and convert to strings
             sorted_numbers = sorted(number_pairs)
@@ -304,6 +345,7 @@ def duolingo_sort():
                 value = parser.parse_number(item)
                 priority = parser.get_language_priority(item)
                 number_pairs.append((value, priority, item))
+                logger.debug(f"Parsed '{item}' -> value: {value}, priority: {priority}")
             
             # Sort by value first, then by priority
             number_pairs.sort(key=lambda x: (x[0], x[1]))
@@ -312,12 +354,12 @@ def duolingo_sort():
             result = [item[2] for item in number_pairs]
         
         else:
+            logger.error(f"Invalid part specified: {part}")
             return jsonify({'error': 'Invalid part specified'}), 400
         
+        logger.info(f"Returning result: {result}")
         return jsonify({'sortedList': result})
     
     except Exception as e:
+        logger.error(f"Error processing request: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
