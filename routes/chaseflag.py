@@ -11,7 +11,7 @@ def chaseflag():
     response_data = {
         "challenge1": "O0qEMh7+oA1ckgB5O2uwzyYyhiA=",
         "challenge2": "",
-        "challenge3": "",
+        "challenge3": "98562706cef8",
         "challenge4": "",
         "challenge5": ""
     }
