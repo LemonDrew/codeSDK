@@ -108,19 +108,25 @@ def double_consonants(x):
 
 @app.route("/operation-safeguard", methods=["POST"])
 def operation_safeguard():
-    
     data = request.get_json()
+    if data is None:
+        return jsonify({"error": "Invalid JSON"}), 400
 
-    challenge_one = data["challenge_one"]
+    challenge_one_data = data.get("challenge_one")
+    if challenge_one_data is None:
+        return jsonify({"error": "Missing challenge_one"}), 400
 
-    result_one = process_challenge_one(challenge_one)
+    result_one = process_challenge_one(challenge_one_data)
 
+    result_two = "value_from_challenge_2"
+    result_three = "value_from_challenge_3"
+    result_four = "final_decrypted_value"
 
     return jsonify({
-        "challenge_one": str(result_one),
-        "challenge_two": "value_from_challenge_2",
-        "challenge_three": "value_from_challenge_3",
-        "challenge_four": "final_decrypted_value"
+        "challenge_one": result_one,
+        "challenge_two": result_two,
+        "challenge_three": result_three,
+        "challenge_four": result_four
     })
 
 if __name__ == "__main__":
