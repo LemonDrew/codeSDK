@@ -1,8 +1,11 @@
-
 import re
+from flask import Flask, request, jsonify
+from routes import app
+import logging
+
+logger = logging.getLogger(__name__)
 
 def process_challenge_one(data):
-
     transform_map = {
         "encode_mirror_alphabet": encode_mirror_alphabet,
         "double_consonants": double_consonants,
@@ -12,15 +15,23 @@ def process_challenge_one(data):
     }
 
     transformations = data["transformations"]
-    encrypted_data = data["transformed_encrypted_word"]
 
-    func_names = re.findall(r'(\w+)\(x\)', transformations)
+    # If it's already a list, just use it; else extract from string
+    if isinstance(transformations, str):
+        func_names = re.findall(r'(\w+)\(x\)', transformations)
+    elif isinstance(transformations, list):
+        func_names = transformations
+    else:
+        raise TypeError("transformations must be a string or list")
+
+    encrypted_data = data["transformed_encrypted_word"]
 
     for function_name in func_names:
         func = transform_map[function_name]
         encrypted_data = func(encrypted_data)
 
     return encrypted_data
+
 
 def mirror_words(x):
 
@@ -97,16 +108,37 @@ def double_consonants(x):
     result = []
 
     for ch in x:
-        if ch.isalpha() and ch not in vowels:  # Consonant
+        if ch.isalpha() and ch not in vowels: 
             result.append(ch * 2)
-        else:  # Vowel or non-letter
+        else:  
             result.append(ch)
 
     return "".join(result)
 
-print(process_challenge_one({
-    "transformations": "[encode_mirror_alphabet(x), double_consonants(x), mirror_words(x), swap_pairs(x), encode_index_parity(x)]",
-    "transformed_encrypted_word": "HELLO"
-  }))
 
+@app.route("/operation-safeguard", methods=["POST"])
+def operation_safeguard():
+    data = request.get_json()
+    if data is None:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    challenge_one_data = data.get("challenge_one")
+    if challenge_one_data is None:
+        return jsonify({"error": "Missing challenge_one"}), 400
+
+    result_one = process_challenge_one(challenge_one_data)
+
+    result_two = "value_from_challenge_2"
+    result_three = "value_from_challenge_3"
+    result_four = "final_decrypted_value"
+
+    return jsonify({
+        "challenge_one": result_one,
+        "challenge_two": result_two,
+        "challenge_three": result_three,
+        "challenge_four": result_four
+    })
+
+if __name__ == "__main__":
+    app.run(port=3000, debug=True)
 
