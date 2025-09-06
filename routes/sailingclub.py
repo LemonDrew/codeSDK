@@ -2,7 +2,7 @@ from routes import app
 from flask import Flask, request, jsonify
 
 @app.route('/sailing-club', methods=['POST'])
-def sailing_club():
+def sailingclub():
     data = request.get_json()
     test_cases = data.get("testCases")
 
