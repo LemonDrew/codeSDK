@@ -64,7 +64,7 @@ def min_boats_needed(intervals):
     
     return max_boats
 
-@app.route('/sailing-club/submission', methods=['POST'])
+@app.route('/sailing-club', methods=['POST'])
 def sailingclub():
     try:
         data = request.get_json()
