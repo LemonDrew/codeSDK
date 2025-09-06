@@ -20,3 +20,4 @@ import routes.mouse
 import routes.gambit
 import routes.bot
 import routes.two
+import routes.ctf
