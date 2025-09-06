@@ -4,3 +4,5 @@ app = Flask(__name__)
 import routes.square
 import routes.investigate
 import routes.ticket
+import routes.trivia
+
