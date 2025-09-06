@@ -9,122 +9,187 @@ from routes import app
 logger = logging.getLogger(__name__)
 
 def solve_princess_diaries(tasks, subway, start_station):
-    """Ultra-optimized Python solution"""
+    """Optimized and correct solution"""
     if not tasks:
         return 0, 0, []
     
-    # Build adjacency list
+    # Build graph efficiently
     graph = defaultdict(list)
-    all_stations = {start_station}
+    stations = set([start_station])
     
     for route in subway:
         u, v, cost = route['connection'][0], route['connection'][1], route['fee']
         graph[u].append((v, cost))
         graph[v].append((u, cost))
-        all_stations.add(u)
-        all_stations.add(v)
+        stations.add(u)
+        stations.add(v)
     
     for task in tasks:
-        all_stations.add(task['station'])
+        stations.add(task['station'])
     
-    # Optimized single-source shortest path
-    def dijkstra(start):
-        dist = {node: float('inf') for node in all_stations}
-        dist[start] = 0
-        pq = [(0, start)]
+    # Convert to list for indexing
+    station_list = sorted(stations)
+    station_to_idx = {s: i for i, s in enumerate(station_list)}
+    n_stations = len(station_list)
+    
+    # Floyd-Warshall for small graphs, Dijkstra for larger ones
+    if n_stations <= 50:
+        # Use Floyd-Warshall for small graphs
+        INF = float('inf')
+        dist = [[INF] * n_stations for _ in range(n_stations)]
         
-        while pq:
-            d, u = heapq.heappop(pq)
-            if d > dist[u]:
-                continue
+        # Initialize
+        for i in range(n_stations):
+            dist[i][i] = 0
+        
+        # Set edges
+        for station in graph:
+            i = station_to_idx[station]
+            for neighbor, cost in graph[station]:
+                j = station_to_idx[neighbor]
+                dist[i][j] = min(dist[i][j], cost)
+        
+        # Floyd-Warshall
+        for k in range(n_stations):
+            for i in range(n_stations):
+                for j in range(n_stations):
+                    if dist[i][k] + dist[k][j] < dist[i][j]:
+                        dist[i][j] = dist[i][k] + dist[k][j]
+        
+        def get_distance(u, v):
+            return dist[station_to_idx[u]][station_to_idx[v]]
+    else:
+        # Use memoized Dijkstra for larger graphs
+        distance_cache = {}
+        
+        def dijkstra(start):
+            if start in distance_cache:
+                return distance_cache[start]
+            
+            dist = {s: float('inf') for s in stations}
+            dist[start] = 0
+            pq = [(0, start)]
+            
+            while pq:
+                d, u = heapq.heappop(pq)
+                if d > dist[u]:
+                    continue
                 
-            for v, w in graph[u]:
-                if d + w < dist[v]:
-                    dist[v] = d + w
-                    heapq.heappush(pq, (d + w, v))
+                for v, w in graph[u]:
+                    if d + w < dist[v]:
+                        dist[v] = d + w
+                        heapq.heappush(pq, (d + w, v))
+            
+            distance_cache[start] = dist
+            return dist
         
-        return dist
+        def get_distance(u, v):
+            return dijkstra(u)[v]
     
-    # Precompute distances only for stations we need
-    needed_stations = {start_station}
-    for task in tasks:
-        needed_stations.add(task['station'])
+    # Sort tasks by end time
+    tasks.sort(key=lambda x: x['end'])
+    n = len(tasks)
     
-    distances = {}
-    for station in needed_stations:
-        dist_map = dijkstra(station)
-        for target in needed_stations:
-            distances[(station, target)] = dist_map[target]
+    # Precompute latest compatible task for each task
+    compatible = [-1] * n
+    for i in range(n):
+        # Binary search for latest compatible task
+        left, right = 0, i - 1
+        result = -1
+        while left <= right:
+            mid = (left + right) // 2
+            if tasks[mid]['end'] <= tasks[i]['start']:
+                result = mid
+                left = mid + 1
+            else:
+                right = mid - 1
+        compatible[i] = result
     
-    # Sort tasks by end time for DP
-    sorted_tasks = sorted(tasks, key=lambda x: x['end'])
-    n = len(sorted_tasks)
+    # DP: for each task, store (max_score, min_cost, task_indices)
+    dp = [None] * n
     
-    # Fast non-overlapping predecessor lookup
-    def find_latest_non_overlapping(i):
-        for j in range(i - 1, -1, -1):
-            if sorted_tasks[j]['end'] <= sorted_tasks[i]['start']:
-                return j
-        return -1
+    # Base case: first task
+    cost0 = get_distance(start_station, tasks[0]['station']) + get_distance(tasks[0]['station'], start_station)
+    dp[0] = (tasks[0]['score'], cost0, [0])
     
-    # DP with single pass
-    # dp[i] = (max_score, min_cost, schedule) for best solution using tasks 0..i
-    dp = {}
-    
-    # Base case
-    first_task = sorted_tasks[0]
-    cost = distances[(start_station, first_task['station'])] + distances[(first_task['station'], start_station)]
-    dp[-1] = (0, 0, [])  # Empty solution
-    dp[0] = (first_task['score'], cost, [first_task['name']])
+    # Also consider not taking first task
+    best_so_far = (0, 0, [])
+    if dp[0][0] > 0:
+        best_so_far = dp[0]
     
     for i in range(1, n):
-        current_task = sorted_tasks[i]
+        current_task = tasks[i]
         
-        # Option 1: Don't take current task
-        dp[i] = dp[i-1]
+        # Option 1: Don't take current task (inherit best so far)
+        dp[i] = best_so_far
         
         # Option 2: Take current task
-        latest_compatible = find_latest_non_overlapping(i)
-        prev_score, prev_cost, prev_schedule = dp[latest_compatible]
+        prev_idx = compatible[i]
         
-        if latest_compatible == -1:
-            # Start fresh
-            new_cost = distances[(start_station, current_task['station'])] + distances[(current_task['station'], start_station)]
-            new_score = current_task['score']
-            new_schedule = [current_task['name']]
+        if prev_idx == -1:
+            # No compatible previous tasks
+            cost = get_distance(start_station, current_task['station']) + get_distance(current_task['station'], start_station)
+            score = current_task['score']
+            schedule = [i]
         else:
-            # Extend previous solution
-            if prev_schedule:
-                # Find the station of the last task in previous schedule
-                last_task_name = prev_schedule[-1]
-                last_station = next(t['station'] for t in sorted_tasks if t['name'] == last_task_name)
-                
-                # Update cost: remove old return, add travel to current, add new return
-                old_return_cost = distances[(last_station, start_station)]
-                travel_cost = distances[(last_station, current_task['station'])]
-                new_return_cost = distances[(current_task['station'], start_station)]
-                
-                new_cost = prev_cost - old_return_cost + travel_cost + new_return_cost
+            # Extend from best compatible solution
+            if prev_idx == 0:
+                prev_solution = dp[0]
             else:
-                new_cost = distances[(start_station, current_task['station'])] + distances[(current_task['station'], start_station)]
+                # Find best solution up to prev_idx
+                prev_solution = (0, 0, [])
+                for j in range(prev_idx + 1):
+                    if dp[j] and (dp[j][0] > prev_solution[0] or 
+                                 (dp[j][0] == prev_solution[0] and dp[j][1] < prev_solution[1])):
+                        prev_solution = dp[j]
             
-            new_score = prev_score + current_task['score']
-            new_schedule = prev_schedule + [current_task['name']]
+            prev_score, prev_cost, prev_schedule = prev_solution
+            
+            if prev_schedule:
+                # Get last task in previous schedule
+                last_task_idx = prev_schedule[-1]
+                last_station = tasks[last_task_idx]['station']
+                
+                # Calculate cost: remove return to start, add travel to current, add new return
+                old_return = get_distance(last_station, start_station)
+                travel = get_distance(last_station, current_task['station'])
+                new_return = get_distance(current_task['station'], start_station)
+                
+                cost = prev_cost - old_return + travel + new_return
+                schedule = prev_schedule + [i]
+            else:
+                cost = get_distance(start_station, current_task['station']) + get_distance(current_task['station'], start_station)
+                schedule = [i]
+            
+            score = prev_score + current_task['score']
         
-        # Keep the better solution
+        # Update if this option is better
         current_score, current_cost, current_schedule = dp[i]
-        if (new_score > current_score or 
-            (new_score == current_score and new_cost < current_cost)):
-            dp[i] = (new_score, new_cost, new_schedule)
+        if (score > current_score or (score == current_score and cost < current_cost)):
+            dp[i] = (score, cost, schedule)
+        
+        # Update best so far
+        if dp[i][0] > best_so_far[0] or (dp[i][0] == best_so_far[0] and dp[i][1] < best_so_far[1]):
+            best_so_far = dp[i]
     
-    max_score, min_cost, best_schedule = dp[n-1]
+    # Find the overall best solution
+    best_solution = (0, 0, [])
+    for solution in dp:
+        if solution and (solution[0] > best_solution[0] or 
+                        (solution[0] == best_solution[0] and solution[1] < best_solution[1])):
+            best_solution = solution
     
-    # Sort schedule by start time
-    if best_schedule:
-        task_start_map = {task['name']: task['start'] for task in tasks}
-        best_schedule.sort(key=lambda name: task_start_map[name])
+    max_score, min_cost, task_indices = best_solution
     
-    return max_score, min_cost, best_schedule
+    # Convert task indices back to names and sort by start time
+    if task_indices:
+        schedule_with_times = [(tasks[i]['name'], tasks[i]['start']) for i in task_indices]
+        schedule_with_times.sort(key=lambda x: x[1])
+        schedule = [name for name, _ in schedule_with_times]
+    else:
+        schedule = []
+    
+    return max_score, int(min_cost), schedule
 
 @app.route('/princess-diaries', methods=['POST'])
 def princess_diaries():
@@ -132,7 +197,7 @@ def princess_diaries():
         data = request.get_json()
         
         tasks = data['tasks']
-        subway = data['subway'] 
+        subway = data['subway']
         start_station = data['starting_station']
         
         max_score, min_fee, schedule = solve_princess_diaries(tasks, subway, start_station)
@@ -148,7 +213,7 @@ def princess_diaries():
             "max_score": 0,
             "min_fee": 0,
             "schedule": []
-        })
+        }), 200
 
 @app.route('/health', methods=['GET'])
 def health():
