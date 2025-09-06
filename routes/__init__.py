@@ -8,3 +8,4 @@ import routes.trivia
 import routes.safeguard
 import routes.princess
 import routes.ink
+import routes.blanks
