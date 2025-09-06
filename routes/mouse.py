@@ -399,23 +399,3 @@ def micro_mouse():
     
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@app.route('/health', methods=['GET'])
-def health():
-    """Health check endpoint"""
-    return jsonify({"status": "healthy", "active_games": len(controllers)})
-
-@app.route('/reset/<game_uuid>', methods=['POST'])
-def reset_game(game_uuid):
-    """Reset a specific game"""
-    if game_uuid in controllers:
-        del controllers[game_uuid]
-        return jsonify({"message": f"Game {game_uuid} reset"})
-    return jsonify({"message": "Game not found"}), 404
-
-if __name__ == '__main__':
-    # Run the Flask server
-    print("Starting Micromouse API Server...")
-    print("Endpoint: POST /micro-mouse")
-    print("Health check: GET /health")
-    app.run(host='0.0.0.0', port=5000, debug=True)
