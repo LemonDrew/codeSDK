@@ -1,7 +1,7 @@
 from routes import app
 from flask import Flask, request, jsonify
 
-@app.route('/sailing-club/submission', methods=['POST'])
+@app.route('/sailing-club', methods=['POST'])
 def sailing_club():
     data = request.get_json()
     test_cases = data.get("testCases")
@@ -20,7 +20,7 @@ def sailing_club():
             "minBoatsNeeded?": 2
         })
 
-    return jsonify(result)
+    return jsonify({"solutions" : result})
 
 
 def sort_input(schedule):
@@ -38,8 +38,8 @@ def sort_input(schedule):
             continue
 
         if current[0] <= start_time <= current[1]:
-            current = [current[0], end_time]
-            continue
+            final_time = end_time if current[1] < end_time else current[1]
+            current = [current[0], final_time]
         
         else:
             result.append(current)
@@ -50,5 +50,8 @@ def sort_input(schedule):
 
     return result
 
+
+if __name__ == "__main__":
+    app.run(port=3000, debug=True)
 
 
