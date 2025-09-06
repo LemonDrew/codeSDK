@@ -2,20 +2,19 @@ import json
 import numpy as np
 from scipy import interpolate
 from scipy.signal import savgol_filter
-from scipy.ndimage import median_filter
 import logging
 from flask import request, jsonify
 from routes import app
 
 logger = logging.getLogger(__name__)
 
-class EnhancedImputer:
+class ConservativeImputer:
     """
-    Enhanced imputation with better pattern detection and accuracy
+    Conservative imputation focused on minimizing error rather than fitting complex patterns
     """
     
     def _safe_array_conversion(self, series):
-        """Safely convert series to numpy array with validation"""
+        """Safely convert series to numpy array"""
         try:
             converted = []
             for val in series:
@@ -31,14 +30,13 @@ class EnhancedImputer:
                     except (ValueError, TypeError, OverflowError):
                         converted.append(np.nan)
             
-            arr = np.array(converted, dtype=np.float64)
-            return arr
+            return np.array(converted, dtype=np.float64)
             
         except Exception:
             return np.full(len(series), np.nan, dtype=np.float64)
     
     def _extract_valid_data(self, arr):
-        """Extract valid indices and values with safety checks"""
+        """Extract valid data points"""
         try:
             valid_mask = np.isfinite(arr)
             valid_indices = np.where(valid_mask)[0]
@@ -54,411 +52,237 @@ class EnhancedImputer:
         except Exception:
             return np.array([]), np.array([]), np.zeros(len(arr), dtype=bool)
     
-    def _detect_noise_level(self, indices, values):
-        """Estimate noise level in the data"""
-        if len(values) < 5:
-            return 0.1
-        
+    def _estimate_local_trend(self, indices, values, target_idx, window_size=10):
+        """Estimate local trend around a target index"""
         try:
-            # Fit linear trend and measure residuals
-            coeffs = np.polyfit(indices, values, 1)
-            trend = np.polyval(coeffs, indices)
-            residuals = values - trend
-            noise_std = np.std(residuals)
+            if len(indices) < 2:
+                return values[0] if len(values) > 0 else 0.0
             
-            # Normalize by data range
-            data_range = np.ptp(values)
-            if data_range > 0:
-                noise_level = noise_std / data_range
-            else:
-                noise_level = 0.1
+            # Find points within window
+            distances = np.abs(indices - target_idx)
+            sorted_idx = np.argsort(distances)
             
-            return min(noise_level, 0.5)  # Cap at 50%
+            # Use up to window_size nearest points
+            local_count = min(window_size, len(indices))
+            local_indices = indices[sorted_idx[:local_count]]
+            local_values = values[sorted_idx[:local_count]]
             
-        except Exception:
-            return 0.1
-    
-    def _enhanced_pattern_detection(self, indices, values):
-        """Enhanced pattern detection with multiple criteria"""
-        if len(values) < 3:
-            return 'linear', 0.5
-        
-        try:
-            patterns = {}
-            
-            # Test linear fit
-            try:
-                linear_coeffs = np.polyfit(indices, values, 1)
-                linear_pred = np.polyval(linear_coeffs, indices)
-                linear_mse = np.mean((values - linear_pred) ** 2)
-                data_var = np.var(values)
-                if data_var > 1e-10:
-                    linear_r2 = 1 - linear_mse / data_var
-                    patterns['linear'] = max(0, linear_r2)
+            if len(local_values) == 1:
+                return local_values[0]
+            elif len(local_values) == 2:
+                # Linear interpolation between two points
+                x1, x2 = local_indices[0], local_indices[1]
+                y1, y2 = local_values[0], local_values[1]
+                if x2 != x1:
+                    return y1 + (y2 - y1) * (target_idx - x1) / (x2 - x1)
                 else:
-                    patterns['linear'] = 0.9
-            except Exception:
-                patterns['linear'] = 0.5
-            
-            # Test quadratic fit
-            if len(values) >= 4:
-                try:
-                    quad_coeffs = np.polyfit(indices, values, 2)
-                    quad_pred = np.polyval(quad_coeffs, indices)
-                    quad_mse = np.mean((values - quad_pred) ** 2)
-                    if data_var > 1e-10:
-                        quad_r2 = 1 - quad_mse / data_var
-                        patterns['quadratic'] = max(0, quad_r2)
-                    else:
-                        patterns['quadratic'] = 0.9
-                except Exception:
-                    patterns['quadratic'] = 0.0
-            
-            # Test exponential fit (positive values only)
-            if len(values) >= 4 and np.all(values > 0):
-                try:
-                    log_values = np.log(values)
-                    if np.all(np.isfinite(log_values)):
-                        exp_coeffs = np.polyfit(indices, log_values, 1)
-                        exp_pred_log = np.polyval(exp_coeffs, indices)
-                        exp_mse = np.mean((log_values - exp_pred_log) ** 2)
-                        log_var = np.var(log_values)
-                        if log_var > 1e-10:
-                            exp_r2 = 1 - exp_mse / log_var
-                            patterns['exponential'] = max(0, exp_r2)
-                        else:
-                            patterns['exponential'] = 0.9
-                except Exception:
-                    patterns['exponential'] = 0.0
-            
-            # Test periodic pattern
-            if len(values) >= 15:
-                try:
-                    # Remove linear trend first
-                    detrended = values - np.polyval(np.polyfit(indices, values, 1), indices)
-                    
-                    # Test multiple periods
-                    periodic_scores = []
-                    for period in range(3, min(len(values) // 3, 50)):
-                        if len(detrended) >= 2 * period:
-                            autocorr = 0
-                            count = 0
-                            for i in range(len(detrended) - period):
-                                autocorr += detrended[i] * detrended[i + period]
-                                count += 1
-                            
-                            if count > 0:
-                                autocorr /= count
-                                periodic_scores.append(autocorr)
-                    
-                    if periodic_scores:
-                        max_autocorr = max(periodic_scores)
-                        avg_autocorr = np.mean(periodic_scores)
-                        if avg_autocorr != 0:
-                            periodic_strength = max_autocorr / (abs(avg_autocorr) + 1e-10)
-                            patterns['periodic'] = min(0.9, max(0, periodic_strength - 1) * 0.5)
-                        else:
-                            patterns['periodic'] = 0.0
-                    else:
-                        patterns['periodic'] = 0.0
-                        
-                except Exception:
-                    patterns['periodic'] = 0.0
-            
-            # Select best pattern
-            if not patterns:
-                return 'linear', 0.5
-            
-            best_pattern = max(patterns, key=patterns.get)
-            confidence = patterns[best_pattern]
-            
-            # Require minimum confidence for non-linear patterns
-            if best_pattern == 'exponential' and confidence < 0.85:
-                best_pattern = 'quadratic' if patterns.get('quadratic', 0) > 0.7 else 'linear'
-            elif best_pattern == 'periodic' and confidence < 0.6:
-                best_pattern = 'quadratic' if patterns.get('quadratic', 0) > 0.7 else 'linear'
-            elif best_pattern == 'quadratic' and confidence < 0.75:
-                best_pattern = 'linear'
-            
-            return best_pattern, patterns.get(best_pattern, 0.5)
-            
-        except Exception:
-            return 'linear', 0.5
-    
-    def _akima_interpolation(self, series):
-        """Akima spline interpolation - good for avoiding oscillations"""
-        arr = self._safe_array_conversion(series)
-        indices, values, valid_mask = self._extract_valid_data(arr)
-        
-        if len(values) < 4:
-            return self._linear_interpolation_safe(series)
-        
-        try:
-            # Sort data
-            sort_idx = np.argsort(indices)
-            sorted_indices = indices[sort_idx]
-            sorted_values = values[sort_idx]
-            
-            # Use Akima interpolation
-            akima = interpolate.Akima1DInterpolator(sorted_indices, sorted_values)
-            
-            all_indices = np.arange(len(series), dtype=np.float64)
-            result = akima(all_indices, extrapolate=True)
-            
-            # Prevent extreme extrapolation
-            value_range = np.ptp(sorted_values)
-            if value_range > 0:
-                center = np.median(sorted_values)
-                max_deviation = 4 * value_range
-                result = np.clip(result, center - max_deviation, center + max_deviation)
-            
-            result = np.nan_to_num(result, nan=0.0, posinf=1e6, neginf=-1e6)
-            return result
-            
-        except Exception:
-            return self._linear_interpolation_safe(series)
-    
-    def _pchip_interpolation(self, series):
-        """PCHIP interpolation - preserves monotonicity"""
-        arr = self._safe_array_conversion(series)
-        indices, values, valid_mask = self._extract_valid_data(arr)
-        
-        if len(values) < 3:
-            return self._linear_interpolation_safe(series)
-        
-        try:
-            # Sort data
-            sort_idx = np.argsort(indices)
-            sorted_indices = indices[sort_idx]
-            sorted_values = values[sort_idx]
-            
-            # Use PCHIP interpolation
-            pchip = interpolate.PchipInterpolator(sorted_indices, sorted_values, extrapolate=True)
-            
-            all_indices = np.arange(len(series), dtype=np.float64)
-            result = pchip(all_indices)
-            
-            # Gentle bounds to preserve shape
-            value_range = np.ptp(sorted_values)
-            if value_range > 0:
-                center = np.median(sorted_values)
-                max_deviation = 6 * value_range
-                result = np.clip(result, center - max_deviation, center + max_deviation)
-            
-            result = np.nan_to_num(result, nan=0.0, posinf=1e6, neginf=-1e6)
-            return result
-            
-        except Exception:
-            return self._linear_interpolation_safe(series)
-    
-    def _smart_spline_selection(self, series):
-        """Intelligently select between different spline types"""
-        arr = self._safe_array_conversion(series)
-        indices, values, valid_mask = self._extract_valid_data(arr)
-        
-        if len(values) < 4:
-            return self._linear_interpolation_safe(series)
-        
-        try:
-            noise_level = self._detect_noise_level(indices, values)
-            
-            # For low noise data, use cubic spline
-            if noise_level < 0.05:
-                return self._cubic_spline_safe(series)
-            # For medium noise, use Akima
-            elif noise_level < 0.15:
-                return self._akima_interpolation(series)
-            # For high noise, use PCHIP or smoothed cubic
+                    return y1
             else:
-                return self._pchip_interpolation(series)
+                # Local linear regression
+                coeffs = np.polyfit(local_indices, local_values, 1)
+                return np.polyval(coeffs, target_idx)
                 
         except Exception:
-            return self._cubic_spline_safe(series)
+            return np.mean(values) if len(values) > 0 else 0.0
     
-    def _linear_interpolation_safe(self, series):
-        """Enhanced linear interpolation"""
+    def _detect_simple_pattern(self, indices, values):
+        """Very conservative pattern detection"""
+        if len(values) < 5:
+            return 'local_linear'
+        
+        try:
+            # Only detect very clear patterns
+            
+            # Test for strong linear trend
+            linear_coeffs = np.polyfit(indices, values, 1)
+            linear_pred = np.polyval(linear_coeffs, indices)
+            linear_r2 = 1 - np.var(values - linear_pred) / np.var(values) if np.var(values) > 1e-10 else 0.9
+            
+            # Test for strong quadratic trend (only if much better than linear)
+            if len(values) >= 8:
+                quad_coeffs = np.polyfit(indices, values, 2)
+                quad_pred = np.polyval(quad_coeffs, indices)
+                quad_r2 = 1 - np.var(values - quad_pred) / np.var(values) if np.var(values) > 1e-10 else 0.9
+                
+                # Only use quadratic if it's significantly better AND has high R²
+                if quad_r2 > 0.95 and quad_r2 > linear_r2 + 0.05:
+                    return 'quadratic'
+            
+            # Strong linear trend
+            if linear_r2 > 0.9:
+                return 'linear'
+            
+            # Default to local linear (safest)
+            return 'local_linear'
+            
+        except Exception:
+            return 'local_linear'
+    
+    def _local_linear_interpolation(self, series):
+        """Local linear interpolation - most conservative approach"""
         arr = self._safe_array_conversion(series)
         indices, values, valid_mask = self._extract_valid_data(arr)
         
         if len(values) == 0:
-            return np.zeros(len(series), dtype=np.float64)
+            return np.zeros(len(series))
         elif len(values) == 1:
-            return np.full(len(series), values[0], dtype=np.float64)
+            return np.full(len(series), values[0])
+        
+        result = np.full(len(series), np.nan)
+        
+        # Fill known values
+        result[indices] = values
+        
+        # Fill missing values using local trends
+        for i in range(len(series)):
+            if np.isnan(result[i]):
+                result[i] = self._estimate_local_trend(indices, values, i, window_size=6)
+        
+        # Final cleanup
+        result = np.nan_to_num(result, nan=0.0, posinf=1e6, neginf=-1e6)
+        return result
+    
+    def _conservative_linear_interpolation(self, series):
+        """Standard linear interpolation with conservative extrapolation"""
+        arr = self._safe_array_conversion(series)
+        indices, values, valid_mask = self._extract_valid_data(arr)
+        
+        if len(values) == 0:
+            return np.zeros(len(series))
+        elif len(values) == 1:
+            return np.full(len(series), values[0])
         
         try:
             f = interpolate.interp1d(
-                indices, values, 
-                kind='linear', 
+                indices, values,
+                kind='linear',
                 fill_value='extrapolate',
-                bounds_error=False,
-                assume_sorted=False
+                bounds_error=False
             )
             
-            all_indices = np.arange(len(series), dtype=np.float64)
-            result = f(all_indices)
+            result = f(np.arange(len(series)))
             
-            result = np.asarray(result, dtype=np.float64)
+            # Conservative extrapolation bounds
+            data_range = np.ptp(values)
+            if data_range > 0:
+                center = np.median(values)
+                max_deviation = 2 * data_range  # Very conservative
+                result = np.clip(result, center - max_deviation, center + max_deviation)
+            
             result = np.nan_to_num(result, nan=0.0, posinf=1e6, neginf=-1e6)
-            
             return result
             
         except Exception:
-            result = np.full(len(series), np.mean(values), dtype=np.float64)
-            return result
+            return self._local_linear_interpolation(series)
     
-    def _cubic_spline_safe(self, series):
-        """Enhanced cubic spline with better boundary conditions"""
+    def _conservative_quadratic_interpolation(self, series):
+        """Conservative quadratic interpolation"""
         arr = self._safe_array_conversion(series)
         indices, values, valid_mask = self._extract_valid_data(arr)
         
         if len(values) < 4:
-            return self._linear_interpolation_safe(series)
+            return self._conservative_linear_interpolation(series)
         
         try:
+            coeffs = np.polyfit(indices, values, 2)
+            result = np.polyval(coeffs, np.arange(len(series)))
+            
+            # Very conservative extrapolation bounds
+            data_range = np.ptp(values)
+            if data_range > 0:
+                center = np.median(values)
+                max_deviation = 1.5 * data_range  # Even more conservative
+                result = np.clip(result, center - max_deviation, center + max_deviation)
+            
+            result = np.nan_to_num(result, nan=0.0, posinf=1e6, neginf=-1e6)
+            return result
+            
+        except Exception:
+            return self._conservative_linear_interpolation(series)
+    
+    def _conservative_spline_interpolation(self, series):
+        """Conservative cubic spline with heavy regularization"""
+        arr = self._safe_array_conversion(series)
+        indices, values, valid_mask = self._extract_valid_data(arr)
+        
+        if len(values) < 5:
+            return self._conservative_linear_interpolation(series)
+        
+        try:
+            # Sort data
             sort_idx = np.argsort(indices)
             sorted_indices = indices[sort_idx]
             sorted_values = values[sort_idx]
             
-            # Choose boundary condition based on data characteristics
-            noise_level = self._detect_noise_level(indices, values)
-            if noise_level < 0.1:
-                bc_type = 'not-a-knot'  # Better for smooth data
-            else:
-                bc_type = 'natural'     # More stable for noisy data
-            
+            # Use natural boundary conditions for stability
             cs = interpolate.CubicSpline(
                 sorted_indices, sorted_values,
-                bc_type=bc_type,
+                bc_type='natural',
                 extrapolate=True
             )
             
-            all_indices = np.arange(len(series), dtype=np.float64)
-            result = cs(all_indices)
+            result = cs(np.arange(len(series)))
             
-            # Conservative extrapolation bounds
-            value_range = np.ptp(sorted_values)
-            if value_range > 0:
+            # Very conservative bounds to prevent overfitting
+            data_range = np.ptp(sorted_values)
+            if data_range > 0:
                 center = np.median(sorted_values)
-                max_deviation = 3 * value_range
+                max_deviation = 2 * data_range
                 result = np.clip(result, center - max_deviation, center + max_deviation)
             
             result = np.nan_to_num(result, nan=0.0, posinf=1e6, neginf=-1e6)
             return result
             
         except Exception:
-            return self._linear_interpolation_safe(series)
+            return self._conservative_linear_interpolation(series)
     
-    def _exponential_safe(self, series):
-        """More conservative exponential interpolation"""
+    def _smoothed_interpolation(self, series):
+        """Smoothed interpolation for noisy data"""
         arr = self._safe_array_conversion(series)
         indices, values, valid_mask = self._extract_valid_data(arr)
         
-        if len(values) < 4 or not np.all(values > 0):
-            return self._smart_spline_selection(series)
+        if len(values) < 8:
+            return self._conservative_linear_interpolation(series)
         
         try:
-            log_values = np.log(np.maximum(values, 1e-10))
-            
-            if not np.all(np.isfinite(log_values)):
-                return self._smart_spline_selection(series)
-            
-            # More conservative slope limits
-            coeffs = np.polyfit(indices, log_values, 1)
-            slope, intercept = coeffs
-            slope = np.clip(slope, -0.005, 0.005)  # Even more conservative
-            
-            all_indices = np.arange(len(series), dtype=np.float64)
-            log_result = slope * all_indices + intercept
-            log_result = np.clip(log_result, -15, 15)  # Tighter bounds
-            result = np.exp(log_result)
-            
-            # Tighter bounds based on original data
-            min_val = np.min(values)
-            max_val = np.max(values)
-            result = np.clip(result, min_val * 0.2, max_val * 5)  # More conservative
-            
-            result = np.nan_to_num(result, nan=0.0, posinf=1e6, neginf=-1e6)
-            return result
-            
-        except Exception:
-            return self._smart_spline_selection(series)
-    
-    def _quadratic_safe(self, series):
-        """Enhanced quadratic interpolation"""
-        arr = self._safe_array_conversion(series)
-        indices, values, valid_mask = self._extract_valid_data(arr)
-        
-        if len(values) < 4:
-            return self._linear_interpolation_safe(series)
-        
-        try:
-            degree = min(2, len(values) - 1)
-            coeffs = np.polyfit(indices, values, degree)
-            
-            all_indices = np.arange(len(series), dtype=np.float64)
-            result = np.polyval(coeffs, all_indices)
-            
-            # More conservative extrapolation bounds
-            value_range = np.ptp(values)
-            if value_range > 0:
-                center = np.median(values)
-                max_deviation = 2.5 * value_range  # Tighter bounds
-                result = np.clip(result, center - max_deviation, center + max_deviation)
-            
-            result = np.nan_to_num(result, nan=0.0, posinf=1e6, neginf=-1e6)
-            return result
-            
-        except Exception:
-            return self._linear_interpolation_safe(series)
-    
-    def _periodic_safe(self, series):
-        """Enhanced periodic interpolation with better smoothing"""
-        arr = self._safe_array_conversion(series)
-        indices, values, valid_mask = self._extract_valid_data(arr)
-        
-        if len(values) < 12:
-            return self._smart_spline_selection(series)
-        
-        try:
-            # Remove trend more carefully
-            trend_coeffs = np.polyfit(indices, values, 1)
-            trend = np.polyval(trend_coeffs, indices)
-            detrended = values - trend
-            
-            # Apply adaptive smoothing
-            if len(detrended) >= 9:
-                window_length = min(len(detrended) // 3, 21)
-                window_length = max(5, window_length)
+            # Apply light smoothing first
+            if len(values) >= 7:
+                window_length = min(7, len(values))
                 if window_length % 2 == 0:
-                    window_length += 1
+                    window_length -= 1
                 
                 try:
-                    # Use lower polynomial order for noisy data
-                    poly_order = min(3, window_length - 1)
-                    smoothed = savgol_filter(detrended, window_length, poly_order)
+                    smoothed_values = savgol_filter(values, window_length, 2)
                 except Exception:
-                    # Fallback to median filter
-                    smoothed = median_filter(detrended, size=min(5, len(detrended)))
+                    smoothed_values = values
             else:
-                smoothed = detrended
+                smoothed_values = values
             
-            # Use PCHIP for smoother interpolation
-            f = interpolate.PchipInterpolator(indices, smoothed, extrapolate=True)
+            # Linear interpolation on smoothed data
+            f = interpolate.interp1d(
+                indices, smoothed_values,
+                kind='linear',
+                fill_value='extrapolate',
+                bounds_error=False
+            )
             
-            all_indices = np.arange(len(series), dtype=np.float64)
-            full_trend = np.polyval(trend_coeffs, all_indices)
-            periodic_part = f(all_indices)
+            result = f(np.arange(len(series)))
             
-            result = full_trend + periodic_part
+            # Conservative bounds
+            data_range = np.ptp(values)  # Use original values for bounds
+            if data_range > 0:
+                center = np.median(values)
+                max_deviation = 2 * data_range
+                result = np.clip(result, center - max_deviation, center + max_deviation)
+            
             result = np.nan_to_num(result, nan=0.0, posinf=1e6, neginf=-1e6)
-            
             return result
             
         except Exception:
-            return self._smart_spline_selection(series)
+            return self._conservative_linear_interpolation(series)
     
     def impute_series(self, series):
-        """Enhanced imputation with better method selection"""
+        """Main imputation with very conservative approach"""
         try:
             if not series or len(series) == 0:
                 return []
@@ -474,23 +298,26 @@ class EnhancedImputer:
             elif len(values) == 1:
                 return [float(values[0])] * len(series)
             elif len(values) == 2:
-                return self._linear_interpolation_safe(series).tolist()
+                return self._conservative_linear_interpolation(series).tolist()
             
-            # Enhanced pattern detection
-            pattern, confidence = self._enhanced_pattern_detection(indices, values)
+            # Conservative pattern detection
+            pattern = self._detect_simple_pattern(indices, values)
             
-            # Apply method with stricter thresholds
-            if pattern == 'exponential' and confidence > 0.85:
-                result = self._exponential_safe(series)
-            elif pattern == 'periodic' and confidence > 0.6:
-                result = self._periodic_safe(series)
-            elif pattern == 'quadratic' and confidence > 0.75:
-                result = self._quadratic_safe(series)
-            else:
-                # Default to smart spline selection
-                result = self._smart_spline_selection(series)
+            # Apply most appropriate method
+            if pattern == 'quadratic':
+                result = self._conservative_quadratic_interpolation(series)
+            elif pattern == 'linear':
+                result = self._conservative_linear_interpolation(series)
+            else:  # local_linear (default)
+                # Choose between local linear and smoothed based on data characteristics
+                if len(values) >= 10:
+                    # For longer series, try smoothed interpolation
+                    result = self._smoothed_interpolation(series)
+                else:
+                    # For shorter series, use local linear
+                    result = self._local_linear_interpolation(series)
             
-            # Final validation
+            # Final validation and conversion
             result = np.asarray(result, dtype=np.float64)
             result = np.nan_to_num(result, nan=0.0, posinf=1e6, neginf=-1e6)
             
@@ -498,7 +325,7 @@ class EnhancedImputer:
             
         except Exception as e:
             logger.error(f"Imputation error: {str(e)}")
-            # Safe fallback
+            # Ultimate safe fallback
             valid_vals = [x for x in series if x is not None]
             if valid_vals:
                 mean_val = sum(valid_vals) / len(valid_vals)
@@ -506,8 +333,8 @@ class EnhancedImputer:
             else:
                 return [0.0] * len(series)
 
-# Initialize enhanced imputer
-imputer = EnhancedImputer()
+# Initialize conservative imputer
+imputer = ConservativeImputer()
 
 @app.route('/blankety', methods=['POST'])
 def blankety_blanks():
