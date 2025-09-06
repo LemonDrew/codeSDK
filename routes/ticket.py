@@ -7,8 +7,6 @@ from flask import request, jsonify
 
 from routes import app
 
-from routes import app
-
 logger = logging.getLogger(__name__)
 
 def calculate_distance(point1, point2):
