@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 from routes import app
 
 @app.route("/the-mages-gambit", methods=["POST"])
-def gambit(data):
+def gambit():
     data = request.get_json()
     result = []
 
