@@ -98,9 +98,9 @@ def double_consonants(x):
     result = []
 
     for ch in x:
-        if ch.isalpha() and ch not in vowels:  # Consonant
+        if ch.isalpha() and ch not in vowels: 
             result.append(ch * 2)
-        else:  # Vowel or non-letter
+        else:  
             result.append(ch)
 
     return "".join(result)
@@ -117,7 +117,7 @@ def operation_safeguard():
 
 
     return jsonify({
-        "challenge_one": result_one,
+        "challenge_one": str(result_one),
         "challenge_two": "value_from_challenge_2",
         "challenge_three": "value_from_challenge_3",
         "challenge_four": "final_decrypted_value"
