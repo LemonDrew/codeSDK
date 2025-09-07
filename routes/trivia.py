@@ -5,15 +5,15 @@ from routes import app
 @app.route('/trivia', methods=['GET'])
 def get_trivia_answers():
     answers = [
-        3,  # Q1: ?
-        1,  # Q2
-        2,  # Q3
-        2,  # Q4
-        3,  # Q5
-        4,  # Q6
-        3,  # Q7: ?
-        1,  # Q8
-        3,  # Q9
+        3,  # 1
+        1,  # 2
+        2,  # 3
+        2,  # 4
+        3,  # 5
+        4,  # 6
+        3,  # 7: ?
+        1,  # 8
+        3,  # 9
         3, #10
         3, #11
         3, #12
@@ -27,7 +27,7 @@ def get_trivia_answers():
         1, #20
         1, #21: ?
         2, #22
-        2, #23: ?
+        3, #23: ?
         5, #24
         2 #25
     ]
@@ -35,6 +35,3 @@ def get_trivia_answers():
     return jsonify({
         "answers": answers
     })
-
-if __name__ == '__main__':
-    app.run(debug=True)
