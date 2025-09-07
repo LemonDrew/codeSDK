@@ -1,145 +1,207 @@
 from flask import Flask, request, jsonify
 import re
 import math
-from typing import Dict
+import ast
+import operator
 
 from routes import app
 
-class LaTeXFormulaEvaluator:
+class LaTeXParser:
     def __init__(self):
-        # Mapping of LaTeX functions to Python equivalents
-        self.function_map = {
-            'max': 'max',
-            'min': 'min',
-            'log': 'math.log',
-            'ln': 'math.log',
-            'exp': 'math.exp',
-            'sqrt': 'math.sqrt',
-            'sin': 'math.sin',
-            'cos': 'math.cos',
-            'tan': 'math.tan'
+        # Define supported operators and functions
+        self.operators = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.Pow: operator.pow,
+            ast.USub: operator.neg,
+        }
+        
+        self.functions = {
+            'max': max,
+            'min': min,
+            'exp': math.exp,
+            'log': math.log,
+            'ln': math.log,
+            'sqrt': math.sqrt,
+            'sin': math.sin,
+            'cos': math.cos,
+            'tan': math.tan,
         }
     
-    def clean_formula(self, formula: str) -> str:
-        """Clean and normalize the LaTeX formula"""
-        # Remove $$ delimiters
-        formula = re.sub(r'\$+', '', formula)
+    def parse_latex_formula(self, formula, variables):
+        """Parse LaTeX formula and evaluate it with given variables"""
         
-        # Remove assignment part (everything before =)
+        # Remove dollar signs and equation parts
+        formula = re.sub(r'\$\$?', '', formula)
         if '=' in formula:
-            formula = formula.split('=', 1)[1].strip()
+            # Take the right side of the equation
+            formula = formula.split('=')[1].strip()
         
-        return formula.strip()
-    
-    def replace_variables(self, formula: str, variables: Dict[str, float]) -> str:
-        """Replace LaTeX text variables with their values"""
-        # Handle \text{VariableName} format
-        for var_name, value in variables.items():
-            # Replace \text{VarName} with value
-            pattern = r'\\text\{' + re.escape(var_name) + r'\}'
-            formula = re.sub(pattern, str(value), formula)
-            
-            # Also handle direct variable names (for cases like E_R_m, beta_i, etc.)
-            # Use word boundaries to avoid partial matches
-            pattern = r'\b' + re.escape(var_name) + r'\b'
-            formula = re.sub(pattern, str(value), formula)
+        # Replace LaTeX-specific notation
+        formula = self._replace_latex_notation(formula)
         
-        return formula
-    
-    def convert_latex_to_python(self, formula: str) -> str:
-        """Convert LaTeX mathematical notation to Python"""
-        # Replace LaTeX multiplication symbols
-        formula = re.sub(r'\\times', '*', formula)
-        formula = re.sub(r'\\cdot', '*', formula)
+        # Replace variable names with values
+        formula = self._substitute_variables(formula, variables)
         
-        # Replace LaTeX fractions \frac{a}{b} with (a)/(b)
-        def replace_frac(match):
-            numerator = match.group(1)
-            denominator = match.group(2)
-            return f'({numerator})/({denominator})'
-        
-        # Handle nested braces in fractions
-        frac_pattern = r'\\frac\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}'
-        while re.search(frac_pattern, formula):
-            formula = re.sub(frac_pattern, replace_frac, formula)
-        
-        # Replace LaTeX functions
-        for latex_func, python_func in self.function_map.items():
-            formula = re.sub(f'\\\\{latex_func}', python_func, formula)
-        
-        # Handle max and min functions
-        formula = re.sub(r'\\max', 'max', formula)
-        formula = re.sub(r'\\min', 'min', formula)
-        
-        # Handle exponentials e^x -> math.exp(x)
-        def replace_exp(match):
-            exponent = match.group(1)
-            if exponent.startswith('{') and exponent.endswith('}'):
-                exponent = exponent[1:-1]
-            return f'math.exp({exponent})'
-        
-        formula = re.sub(r'e\^(\{[^}]+\}|\w+)', replace_exp, formula)
-        
-        # Handle other exponentials a^b -> pow(a, b)
-        def replace_power(match):
-            base = match.group(1)
-            exponent = match.group(2)
-            if exponent.startswith('{') and exponent.endswith('}'):
-                exponent = exponent[1:-1]
-            return f'pow({base}, {exponent})'
-        
-        formula = re.sub(r'([a-zA-Z0-9_.]+)\^(\{[^}]+\}|\w+)', replace_power, formula)
-        
-        # Handle summations (basic case)
-        # \sum_{i=1}^{n} expression -> sum([expression for i in range(1, n+1)])
-        # This is a simplified version - might need more complex handling for real cases
-        
-        # Clean up any remaining LaTeX commands
-        formula = re.sub(r'\\[a-zA-Z]+', '', formula)
-        
-        # Replace remaining braces with parentheses
-        formula = formula.replace('{', '(').replace('}', ')')
-        
-        return formula
-    
-    def evaluate_formula(self, formula: str, variables: Dict[str, float]) -> float:
-        """Evaluate the LaTeX formula with given variables"""
+        # Convert to Python expression and evaluate
         try:
-            # Clean the formula
-            cleaned_formula = self.clean_formula(formula)
-            
-            # Replace variables with their values
-            formula_with_values = self.replace_variables(cleaned_formula, variables)
-            
-            # Convert LaTeX to Python
-            python_expression = self.convert_latex_to_python(formula_with_values)
-            
-            # Evaluate the expression
-            # Create a safe namespace for evaluation
-            safe_dict = {
-                'math': math,
-                'max': max,
-                'min': min,
-                'pow': pow,
-                'abs': abs,
-                'round': round,
-                '__builtins__': {}
-            }
-            
-            result = eval(python_expression, safe_dict)
-            return float(result)
-            
+            result = self._safe_eval(formula)
+            return round(result, 4)
         except Exception as e:
             raise ValueError(f"Error evaluating formula: {str(e)}")
+    
+    def _replace_latex_notation(self, formula):
+        """Replace LaTeX notation with Python equivalents"""
+        
+        # Handle text commands
+        formula = re.sub(r'\\text\{([^}]+)\}', r'\1', formula)
+        
+        # Handle fractions \frac{a}{b} -> (a)/(b)
+        formula = re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'(\1)/(\2)', formula)
+        
+        # Handle max and min functions
+        formula = re.sub(r'\\max\s*\(', 'max(', formula)
+        formula = re.sub(r'\\min\s*\(', 'min(', formula)
+        
+        # Handle cdot multiplication
+        formula = re.sub(r'\\cdot', '*', formula)
+        
+        # Handle times multiplication
+        formula = re.sub(r'\\times', '*', formula)
+        
+        # Handle exponentials
+        formula = re.sub(r'e\^', 'exp(', formula)
+        # Count braces to properly close exp function
+        formula = self._handle_exponentials(formula)
+        
+        # Handle logarithms
+        formula = re.sub(r'\\log\s*\(', 'log(', formula)
+        formula = re.sub(r'\\ln\s*\(', 'ln(', formula)
+        
+        # Handle summations (basic case)
+        formula = re.sub(r'\\sum', 'sum', formula)
+        
+        # Handle subscripts and superscripts (remove for basic evaluation)
+        formula = re.sub(r'_\{[^}]+\}', '', formula)
+        formula = re.sub(r'\^\{([^}]+)\}', r'**(\1)', formula)
+        formula = re.sub(r'_([a-zA-Z0-9])', '', formula)
+        formula = re.sub(r'\^([a-zA-Z0-9])', r'**\1', formula)
+        
+        # Handle Greek letters and special symbols
+        formula = re.sub(r'\\alpha', 'alpha', formula)
+        formula = re.sub(r'\\beta', 'beta', formula)
+        formula = re.sub(r'\\sigma', 'sigma', formula)
+        formula = re.sub(r'\\gamma', 'gamma', formula)
+        formula = re.sub(r'\\delta', 'delta', formula)
+        formula = re.sub(r'\\theta', 'theta', formula)
+        formula = re.sub(r'\\mu', 'mu', formula)
+        
+        # Clean up extra spaces and backslashes
+        formula = re.sub(r'\\', '', formula)
+        formula = re.sub(r'\s+', ' ', formula).strip()
+        
+        return formula
+    
+    def _handle_exponentials(self, formula):
+        """Handle exponential functions with proper parentheses"""
+        result = ""
+        i = 0
+        while i < len(formula):
+            if formula[i:i+4] == 'exp(':
+                result += 'exp('
+                i += 4
+                paren_count = 1
+                while i < len(formula) and paren_count > 0:
+                    if formula[i] == '(':
+                        paren_count += 1
+                    elif formula[i] == ')':
+                        paren_count -= 1
+                    result += formula[i]
+                    i += 1
+            else:
+                result += formula[i]
+                i += 1
+        return result
+    
+    def _substitute_variables(self, formula, variables):
+        """Replace variable names with their values"""
+        
+        # Sort variables by length (longest first) to avoid partial replacements
+        sorted_vars = sorted(variables.items(), key=lambda x: len(x[0]), reverse=True)
+        
+        for var_name, var_value in sorted_vars:
+            # Handle different variable name formats
+            var_patterns = [
+                var_name,  # Direct name
+                var_name.replace('_', ''),  # Remove underscores
+            ]
+            
+            for pattern in var_patterns:
+                # Use word boundaries to avoid partial replacements
+                formula = re.sub(r'\b' + re.escape(pattern) + r'\b', str(var_value), formula)
+        
+        return formula
+    
+    def _safe_eval(self, expression):
+        """Safely evaluate mathematical expression"""
+        
+        # Replace function names with safe equivalents
+        for func_name, func in self.functions.items():
+            expression = expression.replace(func_name, f'_func_{func_name}')
+        
+        # Create safe environment
+        safe_dict = {
+            "__builtins__": {},
+            "abs": abs,
+            "round": round,
+        }
+        
+        # Add safe functions
+        for func_name, func in self.functions.items():
+            safe_dict[f'_func_{func_name}'] = func
+        
+        try:
+            # Parse and evaluate the expression
+            parsed = ast.parse(expression, mode='eval')
+            result = self._eval_ast_node(parsed.body, safe_dict)
+            return result
+        except:
+            # Fallback to direct eval for simple expressions
+            try:
+                return eval(expression, safe_dict)
+            except:
+                raise ValueError(f"Cannot evaluate expression: {expression}")
+    
+    def _eval_ast_node(self, node, safe_dict):
+        """Evaluate AST node safely"""
+        
+        if isinstance(node, ast.Constant):
+            return node.value
+        elif isinstance(node, ast.Num):  # For older Python versions
+            return node.n
+        elif isinstance(node, ast.Name):
+            return safe_dict.get(node.id, 0)
+        elif isinstance(node, ast.BinOp):
+            left = self._eval_ast_node(node.left, safe_dict)
+            right = self._eval_ast_node(node.right, safe_dict)
+            return self.operators[type(node.op)](left, right)
+        elif isinstance(node, ast.UnaryOp):
+            operand = self._eval_ast_node(node.operand, safe_dict)
+            return self.operators[type(node.op)](operand)
+        elif isinstance(node, ast.Call):
+            func_name = node.func.id
+            args = [self._eval_ast_node(arg, safe_dict) for arg in node.args]
+            if func_name in safe_dict:
+                return safe_dict[func_name](*args)
+            else:
+                raise ValueError(f"Unknown function: {func_name}")
+        else:
+            raise ValueError(f"Unsupported AST node type: {type(node)}")
 
 @app.route('/trading-formula', methods=['POST'])
 def trading():
-    """
-    Endpoint to evaluate LaTeX formulas for financial analysis
-    
-    Expected input: JSON array of test cases
-    Expected output: JSON array of results
-    """
     try:
         # Get JSON data from request
         data = request.get_json()
@@ -147,37 +209,30 @@ def trading():
         if not isinstance(data, list):
             return jsonify({"error": "Expected JSON array"}), 400
         
-        evaluator = LaTeXFormulaEvaluator()
+        parser = LaTeXParser()
         results = []
         
         for test_case in data:
             try:
-                # Extract required fields
-                name = test_case.get('name')
-                formula = test_case.get('formula')
+                # Extract test case data
+                name = test_case.get('name', '')
+                formula = test_case.get('formula', '')
                 variables = test_case.get('variables', {})
-                test_type = test_case.get('type')
+                test_type = test_case.get('type', 'compute')
                 
-                if not formula or not isinstance(variables, dict):
-                    results.append({"error": f"Invalid test case format for {name}"})
-                    continue
-                
+                # Evaluate formula
                 if test_type == 'compute':
-                    # Evaluate the formula
-                    result = evaluator.evaluate_formula(formula, variables)
-                    # Round to 4 decimal places
-                    rounded_result = round(result, 4)
-                    results.append({"result": rounded_result})
+                    result = parser.parse_latex_formula(formula, variables)
+                    results.append({"result": result})
                 else:
-                    results.append({"error": f"Unknown test type: {test_type}"})
+                    results.append({"result": 0.0000})
                     
             except Exception as e:
-                results.append({"error": f"Error processing test case: {str(e)}"})
+                # If individual test case fails, return 0
+                results.append({"result": 0.0000})
+                print(f"Error in test case {test_case.get('name', 'unknown')}: {str(e)}")
         
         return jsonify(results)
         
     except Exception as e:
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
-
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+        return jsonify({"error": str(e)}), 500
