@@ -1,5 +1,4 @@
-from flask import Flask, request, jsonify
-import json
+from flask import request, jsonify
 
 from routes import app
 
@@ -176,6 +175,3 @@ def fog():
     except Exception as e:
         print(f"Error: {e}")
         return jsonify({'error': str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)

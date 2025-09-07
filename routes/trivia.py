@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import jsonify
 
 from routes import app
 
@@ -23,11 +23,11 @@ def get_trivia_answers():
         1, #16
         1, #17
         2, #18
-        1, #19: ?
+        2, #19: ?
         1, #20
         1, #21: ?
         2, #22
-        3, #23: ?
+        3, #23
         5, #24
         2 #25
     ]
